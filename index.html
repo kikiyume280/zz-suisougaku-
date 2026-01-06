@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>合作音ゲー（統合版・MP3合成対応）</title>
+  <title>合作音ゲー（修正版）</title>
+  <!-- Prevent browser requesting /favicon.ico (avoids 404 in console) -->
+  <link rel="icon" href="data:," />
   <style>
     body{font-family: system-ui, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
     #top{padding:12px; display:flex; gap:8px; align-items:center; background:#fff; border-bottom:1px solid #ddd}
     #statusBar{margin-left:12px; font-size:14px; color:#333}
-    #waiting,#game,#result{display:none; padding:12px}
+    #waiting,#waiting2,#game,#result{display:none; padding:12px}
     .role { padding:6px; border-radius:6px; margin:4px; display:inline-block; min-width:120px; white-space:pre-line}
     #lane{position:relative; height:60vh; background:#000; color:white; overflow:hidden; border-radius:8px}
-    .note{ position:absolute; left:50%; transform:translateX(-50%); width:80%; height:16px; border-radius:4px; text-align:center; line-height:16px; font-size:14px; opacity:0.95}
+    .note{ position:absolute; left:50%; transform:translateX(-50%); width:80%; height:16px; border-radius:4px; text-align:center; line-height:16px; font-size:14px; opacity:0.95; transition:opacity 0.06s linear}
     #judgeLine{position:absolute; bottom:60px; left:0; right:0; height:8px; background:rgba(255,255,255,0.92); z-index:5}
     #topBalls{display:flex; gap:6px; margin-top:6px; flex-wrap:wrap}
     .ball{width:34px; height:34px; border-radius:50%; background:#666; display:flex; align-items:center; justify-content:center; color:white; font-size:12px}
@@ -24,6 +26,9 @@
     #transientText{position:absolute; left:50%; transform:translateX(-50%); bottom:90px; font-size:28px; font-weight:700; color:#fff; text-shadow:0 0 6px #000; pointer-events:none; opacity:0; transition:opacity 0.12s linear}
     #userInfo{font-size:13px; color:#333; margin-left:12px}
     #adminApply{margin-left:6px}
+    /* waiting2 (pseudo wait room) */
+    #waiting2 .panel { background:#fff; padding:12px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.08) }
+    #waiting2 .bigStatus { font-size:18px; margin-bottom:8px }
   </style>
 </head>
 <body>
@@ -48,6 +53,21 @@
     </div>
   </div>
 
+  <!-- waiting2: pseudo waiting room after song ends, shows big status and final controls -->
+  <div id="waiting2">
+    <div class="panel">
+      <div class="bigStatus">セッション完了待ち／合成中の状態がここに表示されます</div>
+      <div id="waiting2Status" class="small">現在: --</div>
+      <div style="margin-top:12px">
+        <audio id="waiting2Audio" controls style="width:100%"></audio>
+        <div style="margin-top:8px">
+          <button id="waiting2Download" style="display:none">保存（MP3）</button>
+          <button id="waiting2Back">戻る（待機へ）</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="game">
     <h3 id="roleTitle"></h3>
     <div id="lane">
@@ -67,750 +87,895 @@
   </div>
 
   <script type="module">
-/*
-  使い方
-  - このファイルの CONFIG セクションを直接編集して、@ や A/B... の clipUrl / color / guideTimes を入力してください。
-  - overrideAssets = true にすると CONFIG が優先されます（開発時は true が便利）。
-  - Firebase の Realtime Database と Authentication(Anonymous) は有効にしてください。
-  - MP3 変換には lamejs を CDN から読み込みます（自動で読み込みます）。処理は重めです。
-*/
+/* 修正版: 404 favicon 対策、showResult 定義追加、waiting2 の追加、
+   ノーツの「線で消える」判定・パーフェクト時の即時消去、ミス時の挙動を改善
+   （前のコードをできるだけ壊さずに改修） */
 
-/* ------------------ CONFIG（直接書き換えてください） ------------------ */
-const CONFIG = {
-  overrideAssets: true,
-  assets: {
-    "@": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/kyoku.mp3",
-    "miss": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/miss.mp3",
-    "A": {
-      clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/A.mp3",
-      color: "#FF6666",
-      guideTimes: ["0:18.00", "0:25.56", "0:38.12","0:54.94","0:57.80"]
-    },
-    "B": {
-      clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/B.mp3",
-      color: "#66CCFF",
-      guideTimes: ["0:27.50","0:28.21","0:28.83","0:29.60","0:30.32","0:31.01","0:31.78","0:32.48","0:33.15","0:34.66","0:35.38","0:36.02","0:36.75","0:42.09","0:44.09","0:54.96","0:57.77"]
-    }
-  },
-  rolesOrder: ["A","B","C","D","E","F","G","H","I"]
-};
-/* --------------------------------------------------------------------- */
-
-// --- Firebase 初期化 ---
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-import { getDatabase, ref, onValue, set, update, get, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
-import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
-
-// firebaseConfig: databaseURL と storageBucket は正しく設定してください
-const firebaseConfig = {
-  apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
-  authDomain: "suisougaku-bdcc0.firebaseapp.com",
-  projectId: "suisougaku-bdcc0",
-  databaseURL: "https://suisougaku-bdcc0-default-rtdb.firebaseio.com/",
-  storageBucket: "suisougaku-bdcc0.appspot.com",
-  messagingSenderId: "636001978886",
-  appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
-  measurementId: "G-Y04PFJ9BQ6"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const auth = getAuth(app);
-
-// --- グローバル ---
-const sessionId = "session-proto-1";
-const sessionRef = ref(db, `sessions/${sessionId}`);
-
-let uid = null;
-let userName = null;
-let userRole = null;
-let isAdmin = false;
-let adminApplied = false;
-let startServerTime = null;
-let serverOffset = 0;
-let assets = null;
-let audioContext = null;
-let baseAudioBuffer = null;
-let roleAudioBuffer = null;
-let missAudioBuffer = null;
-let localClicks = []; // record during play; push to DB only when base ends
-let currentSessionSnapshot = null;
-let baseSourceNode = null;
-let baseEndTimer = null;
-
-// --- DOM ---
-const joinBtn = document.getElementById('joinBtn');
-const startBtn = document.getElementById('startBtn');
-const adminResetBtn = document.getElementById('adminReset');
-const adminApplyBtn = document.getElementById('adminApply');
-const adminPwInput = document.getElementById('adminPw');
-const rolesListEl = document.getElementById('rolesList');
-const waitingEl = document.getElementById('waiting');
-const gameEl = document.getElementById('game');
-const resultEl = document.getElementById('result');
-const roleTitleEl = document.getElementById('roleTitle');
-const laneEl = document.getElementById('lane');
-const topBallsEl = document.getElementById('topBalls');
-const finalAudioEl = document.getElementById('finalAudio');
-const downloadBtn = document.getElementById('downloadBtn');
-const backBtn = document.getElementById('backBtn');
-const transientTextEl = document.getElementById('transientText');
-const userInfoEl = document.getElementById('userInfo');
-const stateTextEl = document.getElementById('stateText');
-
-// --- 初期化 ---
-(async function init(){
-  try {
-    await signInAnonymously(auth);
-    uid = auth.currentUser.uid;
-    console.log('signed in uid=', uid);
-  } catch (err) {
-    console.error(err);
-    alert('Firebase の匿名ログインに失敗しました。Console で Anonymous を有効にしてください。\n' + err.message);
-  }
-
-  joinBtn.addEventListener('click', joinFlow);
-  startBtn.addEventListener('click', onStartClicked);
-  adminResetBtn.addEventListener('click', onAdminReset);
-  adminApplyBtn.addEventListener('click', onAdminApply);
-  downloadBtn.addEventListener('click', onDownloadMP3);
-  backBtn.addEventListener('click', () => { resultEl.style.display = 'none'; waitingEl.style.display = 'block'; });
-
-  onValue(sessionRef, snapshot => {
-    const v = snapshot.val();
-    currentSessionSnapshot = v || {};
-    if (CONFIG.overrideAssets || !(currentSessionSnapshot.assets && Object.keys(currentSessionSnapshot.assets).length)) {
-      assets = normalizeConfigAssets(CONFIG.assets || {});
-    } else {
-      assets = normalizeConfigAssets(currentSessionSnapshot.assets || {});
-    }
-    startServerTime = currentSessionSnapshot.startServerTime || null;
-    updateStateUI(currentSessionSnapshot.status || 'waiting');
-    updateRolesView(currentSessionSnapshot);
-
-    const status = currentSessionSnapshot.status || 'waiting';
-    joinBtn.style.display = status === 'running' ? 'none' : 'inline-block';
-
-    if (status === 'running') {
-      // if our user joined, show game
-      if (currentSessionSnapshot.players && currentSessionSnapshot.players[uid]) {
-        userRole = currentSessionSnapshot.players[uid].role;
-        showGame();
+  // ------------------ CONFIG（直接編集） ------------------
+  const CONFIG = {
+    overrideAssets: true,
+    assets: {
+      "@": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/kyoku.mp3",
+      "miss": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/miss.mp3",
+      "A": {
+        clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/A.mp3",
+        color: "#FF6666",
+        guideTimes: ["0:18.00", "0:25.56", "0:38.12","0:54.94","0:57.80"]
+      },
+      "B": {
+        clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/B.mp3",
+        color: "#66CCFF",
+        guideTimes: ["0:27.50","0:28.21","0:28.83","0:29.60","0:30.32","0:31.01","0:31.78","0:32.48","0:33.15","0:34.66","0:35.38","0:36.02","0:36.75","0:42.09","0:44.09","0:54.96","0:57.77"]
       }
-    } else if (status === 'finished' && currentSessionSnapshot.finalMeta) {
-      // show final screen (client will generate mp3 locally)
-      showResult(null); // no server URL; clients will produce MP3 locally
+    },
+    rolesOrder: ["A","B","C","D","E","F","G","H","I"]
+  };
+
+  // --- Firebase 初期化 ---
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, get, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
+    authDomain: "suisougaku-bdcc0.firebaseapp.com",
+    projectId: "suisougaku-bdcc0",
+    databaseURL: "https://suisougaku-bdcc0-default-rtdb.firebaseio.com/",
+    storageBucket: "suisougaku-bdcc0.appspot.com",
+    messagingSenderId: "636001978886",
+    appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
+    measurementId: "G-Y04PFJ9BQ6"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const auth = getAuth(app);
+
+  // --- globals ---
+  const sessionId = "session-proto-1";
+  const sessionRef = ref(db, `sessions/${sessionId}`);
+
+  let uid = null;
+  let userName = null;
+  let userRole = null;
+  let isAdmin = false;
+  let adminApplied = false;
+  let startServerTime = null;
+  let serverOffset = 0;
+  let assets = null;
+  let audioContext = null;
+  let baseAudioBuffer = null;
+  let roleAudioBuffer = null;
+  let missAudioBuffer = null;
+  let localClicks = []; // recorded times during play [{t}]
+  let currentSessionSnapshot = null;
+  let baseSourceNode = null;
+  let baseEndTimer = null;
+
+  // --- DOM ---
+  const joinBtn = document.getElementById('joinBtn');
+  const startBtn = document.getElementById('startBtn');
+  const adminResetBtn = document.getElementById('adminReset');
+  const adminApplyBtn = document.getElementById('adminApply');
+  const adminPwInput = document.getElementById('adminPw');
+  const rolesListEl = document.getElementById('rolesList');
+  const waitingEl = document.getElementById('waiting');
+  const waiting2El = document.getElementById('waiting2');
+  const waiting2StatusEl = document.getElementById('waiting2Status');
+  const waiting2Audio = document.getElementById('waiting2Audio');
+  const waiting2Download = document.getElementById('waiting2Download');
+  const waiting2Back = document.getElementById('waiting2Back');
+  const gameEl = document.getElementById('game');
+  const resultEl = document.getElementById('result');
+  const roleTitleEl = document.getElementById('roleTitle');
+  const laneEl = document.getElementById('lane');
+  const topBallsEl = document.getElementById('topBalls');
+  const finalAudioEl = document.getElementById('finalAudio');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const backBtn = document.getElementById('backBtn');
+  const transientTextEl = document.getElementById('transientText');
+  const userInfoEl = document.getElementById('userInfo');
+  const stateTextEl = document.getElementById('stateText');
+
+  // --- init ---
+  (async function init(){
+    try {
+      await signInAnonymously(auth);
+      uid = auth.currentUser.uid;
+      console.log('signed in uid=', uid);
+    } catch (err) {
+      console.error('auth error', err);
+      alert('Firebase の匿名ログインに失敗しました。Console で Anonymous を有効にしてください。\n' + err.message);
+    }
+
+    joinBtn.addEventListener('click', joinFlow);
+    startBtn.addEventListener('click', onStartClicked);
+    adminResetBtn.addEventListener('click', onAdminReset);
+    adminApplyBtn.addEventListener('click', onAdminApply);
+    downloadBtn.addEventListener('click', onDownloadMP3);
+    waiting2Download.addEventListener('click', onDownloadWaiting2MP3);
+    waiting2Back.addEventListener('click', () => { waiting2El.style.display='none'; waitingEl.style.display='block'; });
+
+    onValue(sessionRef, snapshot => {
+      const v = snapshot.val();
+      currentSessionSnapshot = v || {};
+      if (CONFIG.overrideAssets || !(currentSessionSnapshot.assets && Object.keys(currentSessionSnapshot.assets).length)) {
+        assets = normalizeConfigAssets(CONFIG.assets || {});
+      } else {
+        assets = normalizeConfigAssets(currentSessionSnapshot.assets || {});
+      }
+      startServerTime = currentSessionSnapshot.startServerTime || null;
+      updateStateUI(currentSessionSnapshot.status || 'waiting');
+      updateRolesView(currentSessionSnapshot);
+
+      const status = currentSessionSnapshot.status || 'waiting';
+      joinBtn.style.display = status === 'running' ? 'none' : 'inline-block';
+
+      if (status === 'running') {
+        if (currentSessionSnapshot.players && currentSessionSnapshot.players[uid]) {
+          userRole = currentSessionSnapshot.players[uid].role;
+          showGame();
+        }
+      } else if (status === 'finished') {
+        // keep waiting2 visible if we already rendered a final in waiting2
+      } else {
+        waitingEl.style.display = 'block';
+        waiting2El.style.display = 'none';
+        gameEl.style.display = 'none';
+        resultEl.style.display = 'none';
+      }
+    });
+
+    await estimateServerOffset();
+    window.addEventListener('resize', adjustLaneHeight);
+    adjustLaneHeight();
+  })();
+
+  // ------------------ util: normalize / parse times ------------------
+  function normalizeConfigAssets(rawAssets) {
+    const out = {};
+    for (const k of Object.keys(rawAssets || {})) {
+      if (k === '@' || k === 'miss') {
+        out[k] = rawAssets[k];
+        continue;
+      }
+      const v = rawAssets[k] || {};
+      out[k] = {
+        clipUrl: v.clipUrl || v.url || null,
+        color: v.color || '#777',
+        guideTimes: (v.guideTimes || []).map(parseTimeToSeconds)
+      };
+    }
+    if (rawAssets['@']) out['@'] = rawAssets['@'];
+    if (rawAssets['miss']) out['miss'] = rawAssets['miss'];
+    return out;
+  }
+  function parseTimeToSeconds(val) {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return val;
+    const s = String(val).trim();
+    if (!s) return 0;
+    if (s.indexOf(':') === -1) {
+      const f = parseFloat(s);
+      return isFinite(f) ? f : 0;
+    }
+    const parts = s.split(':').map(p => p.trim());
+    let seconds = 0;
+    if (parts.length === 3) {
+      const h = parseInt(parts[0]) || 0;
+      const m = parseInt(parts[1]) || 0;
+      const sec = parseFloat(parts[2].replace(',', '.')) || 0;
+      seconds = h*3600 + m*60 + sec;
+    } else if (parts.length === 2) {
+      const m = parseInt(parts[0]) || 0;
+      const sec = parseFloat(parts[1].replace(',', '.')) || 0;
+      seconds = m*60 + sec;
     } else {
-      waitingEl.style.display = 'block';
-      gameEl.style.display = 'none';
-      resultEl.style.display = 'none';
+      seconds = parseFloat(parts[0].replace(',', '.')) || 0;
     }
-  });
+    return seconds;
+  }
 
-  await estimateServerOffset();
-  window.addEventListener('resize', adjustLaneHeight);
-  adjustLaneHeight();
-})();
+  // ------------------ UI / DB operations ------------------
+  function updateStateUI(status) {
+    const map = { waiting:'待機中', running:'演奏中', collecting:'集計中', compiling:'合成中', finished:'完成' };
+    stateTextEl.textContent = map[status] || status;
+    isAdmin = adminApplied;
+    adminResetBtn.style.display = isAdmin ? 'inline-block' : 'none';
+    startBtn.style.display = isAdmin ? 'inline-block' : 'none';
+  }
 
-// ------------------ CONFIG normalization / time parse ------------------
-function normalizeConfigAssets(rawAssets) {
-  const out = {};
-  for (const k of Object.keys(rawAssets || {})) {
-    if (k === '@' || k === 'miss') {
-      out[k] = rawAssets[k];
-      continue;
+  function updateRolesView(sessionData) {
+    rolesListEl.innerHTML = '';
+    const rolesOrder = sessionData.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+    (rolesOrder).forEach(role => {
+      const info = assets && assets[role];
+      const color = info?.color || '#777';
+      const el = document.createElement('div');
+      el.className = 'role';
+      el.style.background = color;
+      el.style.color = getContrastYIQ(color);
+      let text = `${role}`;
+      const names = [];
+      for (const [puid, pdata] of Object.entries(sessionData.players || {})) {
+        if (pdata.role === role) names.push(pdata.name);
+      }
+      if (names.length) text += '\n' + names.join(', ');
+      el.textContent = text;
+      rolesListEl.appendChild(el);
+    });
+
+    if (sessionData.players && sessionData.players[uid]) {
+      userInfoEl.textContent = `あなた: ${sessionData.players[uid].name} (${sessionData.players[uid].role})`;
+      userRole = sessionData.players[uid].role;
+    } else {
+      userInfoEl.textContent = '未参加';
     }
-    const v = rawAssets[k] || {};
-    out[k] = {
-      clipUrl: v.clipUrl || v.url || null,
-      color: v.color || '#777',
-      guideTimes: (v.guideTimes || []).map(parseTimeToSeconds)
-    };
   }
-  if (rawAssets['@']) out['@'] = rawAssets['@'];
-  if (rawAssets['miss']) out['miss'] = rawAssets['miss'];
-  return out;
-}
-function parseTimeToSeconds(val) {
-  if (val === null || val === undefined) return 0;
-  if (typeof val === 'number') return val;
-  const s = String(val).trim();
-  if (!s) return 0;
-  if (s.indexOf(':') === -1) {
-    const f = parseFloat(s);
-    return isFinite(f) ? f : 0;
-  }
-  const parts = s.split(':').map(p => p.trim());
-  let seconds = 0;
-  if (parts.length === 3) {
-    const h = parseInt(parts[0]) || 0;
-    const m = parseInt(parts[1]) || 0;
-    const sec = parseFloat(parts[2].replace(',', '.')) || 0;
-    seconds = h*3600 + m*60 + sec;
-  } else if (parts.length === 2) {
-    const m = parseInt(parts[0]) || 0;
-    const sec = parseFloat(parts[1].replace(',', '.')) || 0;
-    seconds = m*60 + sec;
-  } else {
-    seconds = parseFloat(parts[0].replace(',', '.')) || 0;
-  }
-  return seconds;
-}
 
-// ------------------ UI / DB 操作 ------------------
-function updateStateUI(status) {
-  const map = { waiting:'待機中', running:'演奏中', collecting:'集計中', compiling:'合成中', finished:'完成' };
-  stateTextEl.textContent = map[status] || status;
-  isAdmin = adminApplied;
-  adminResetBtn.style.display = isAdmin ? 'inline-block' : 'none';
-  startBtn.style.display = isAdmin ? 'inline-block' : 'none';
-}
-
-function updateRolesView(sessionData) {
-  rolesListEl.innerHTML = '';
-  const rolesOrder = sessionData.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-  (rolesOrder).forEach(role => {
-    const info = assets && assets[role];
-    const color = info?.color || '#777';
-    const el = document.createElement('div');
-    el.className = 'role';
-    el.style.background = color;
-    el.style.color = getContrastYIQ(color);
-    let text = `${role}`;
-    const names = [];
-    for (const [puid, pdata] of Object.entries(sessionData.players || {})) {
-      if (pdata.role === role) names.push(pdata.name);
-    }
-    if (names.length) text += '\n' + names.join(', ');
-    el.textContent = text;
-    rolesListEl.appendChild(el);
-  });
-
-  if (sessionData.players && sessionData.players[uid]) {
-    userInfoEl.textContent = `あなた: ${sessionData.players[uid].name} (${sessionData.players[uid].role})`;
-    userRole = sessionData.players[uid].role;
-  } else {
-    userInfoEl.textContent = '未参加';
-  }
-}
-
-async function joinFlow(){
-  const name = prompt('名前を入力してください');
-  if (!name) return;
-  userName = name.trim() || '名無し';
-  const snap = await get(sessionRef);
-  const session = snap.val() || {};
-  const players = session.players || {};
-  const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-  const assigned = Object.values(players).map(p => p.role);
-  let roleToAssign = null;
-  for (const r of rolesOrder) {
-    if (!assigned.includes(r)) { roleToAssign = r; break; }
-  }
-  if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
-  await set(ref(db, `sessions/${sessionId}/players/${uid}`), { name: userName, role: roleToAssign, joinedAt: Date.now() });
-  userRole = roleToAssign;
-  userInfoEl.textContent = `あなた: ${userName} (${userRole})`;
-  waitingEl.style.display = 'block';
-}
-
-async function onAdminApply(){
-  const val = adminPwInput.value;
-  if (val === '1122') {
-    adminApplied = true;
-    isAdmin = true;
-    updateStateUI(currentSessionSnapshot.status || 'waiting');
-    alert('運営モードに切り替わりました');
-  } else {
-    alert('パスワードが違います');
-  }
-}
-
-async function onStartClicked(){
-  if (!isAdmin) { alert('運営パスが必要です'); return; }
-  try {
-    // set status running with serverTimestamp
-    await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
-
-    // fill auto records for empty roles
+  async function joinFlow(){
+    const name = prompt('名前を入力してください');
+    if (!name) return;
+    userName = name.trim() || '名無し';
     const snap = await get(sessionRef);
     const session = snap.val() || {};
     const players = session.players || {};
     const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-
+    const assigned = Object.values(players).map(p => p.role);
+    let roleToAssign = null;
     for (const r of rolesOrder) {
-      const assignedNames = Object.values(players).filter(p => p.role === r);
-      if (!assignedNames.length) {
-        const guideTimes = (assets[r] && assets[r].guideTimes) || [];
-        const autoUid = `__auto_${r}`;
-        const autoClicks = guideTimes.map(t => ({ t }));
-        await set(ref(db, `sessions/${sessionId}/records/${autoUid}`), autoClicks);
-      }
+      if (!assigned.includes(r)) { roleToAssign = r; break; }
     }
-    // clear any previous finalMeta
-    await update(sessionRef, { finalMeta: null });
-  } catch (e) {
-    console.error('start failed', e);
-    alert('開始に失敗しました。Console を確認してください。');
+    if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
+    await set(ref(db, `sessions/${sessionId}/players/${uid}`), { name: userName, role: roleToAssign, joinedAt: Date.now() });
+    userRole = roleToAssign;
+    userInfoEl.textContent = `あなた: ${userName} (${userRole})`;
+    waitingEl.style.display = 'block';
   }
-}
 
-async function onAdminReset(){
-  if (!confirm('本当に強制終了してセッションの参加者/記録を初期化しますか？（assetsは維持されます）')) return;
-  try {
-    const keepAssets = currentSessionSnapshot.assets || CONFIG.assets || {};
-    const payload = { status: 'waiting', assets: keepAssets, rolesOrder: currentSessionSnapshot.rolesOrder || CONFIG.rolesOrder || CONFIG.rolesOrder };
-    await set(sessionRef, payload);
-    await set(ref(db, `sessions/${sessionId}/players`), null);
-    await set(ref(db, `sessions/${sessionId}/records`), null);
-    await set(ref(db, `sessions/${sessionId}/realtimeActions`), null);
-    await set(ref(db, `sessions/${sessionId}/startServerTime`), null);
-    await set(ref(db, `sessions/${sessionId}/finalMeta`), null);
-    alert('強制終了しました。参加者データと記録を削除しました。');
-  } catch(e) {
-    console.error('reset failed', e);
-    alert('強制終了に失敗しました。Console を確認してください。');
+  async function onAdminApply(){
+    const val = adminPwInput.value;
+    if (val === '1122') {
+      adminApplied = true;
+      isAdmin = true;
+      updateStateUI(currentSessionSnapshot.status || 'waiting');
+      alert('運営モードに切り替わりました');
+    } else {
+      alert('パスワードが違います');
+    }
   }
-}
 
-function showGame(){
-  waitingEl.style.display = 'none';
-  gameEl.style.display = 'block';
-  resultEl.style.display = 'none';
-  roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
-  if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  localClicks = [];
-  loadAssetsAndStart();
-  window.addEventListener('keydown', onKeyDown);
-  laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
-}
+  async function onStartClicked(){
+    if (!isAdmin) { alert('運営パスが必要です'); return; }
+    try {
+      await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
+      // auto records for empty roles
+      const snap = await get(sessionRef);
+      const session = snap.val() || {};
+      const players = session.players || {};
+      const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+      for (const r of rolesOrder) {
+        const assignedNames = Object.values(players).filter(p => p.role === r);
+        if (!assignedNames.length) {
+          const guideTimes = (assets[r] && assets[r].guideTimes) || [];
+          const autoUid = `__auto_${r}`;
+          const autoClicks = guideTimes.map(t => ({ t }));
+          await set(ref(db, `sessions/${sessionId}/records/${autoUid}`), autoClicks);
+        }
+      }
+      await update(sessionRef, { finalMeta: null });
+    } catch (e) {
+      console.error('start failed', e);
+      alert('開始に失敗しました。Console を確認してください。');
+    }
+  }
 
-function onKeyDown(e){
-  if (e.code === 'Space') {
-    e.preventDefault();
+  async function onAdminReset(){
+    if (!confirm('本当に強制終了してセッションの参加者/記録を初期化しますか？（assetsは維持されます）')) return;
+    try {
+      const keepAssets = currentSessionSnapshot.assets || CONFIG.assets || {};
+      const payload = { status: 'waiting', assets: keepAssets, rolesOrder: currentSessionSnapshot.rolesOrder || CONFIG.rolesOrder || CONFIG.rolesOrder };
+      await set(sessionRef, payload);
+      await set(ref(db, `sessions/${sessionId}/players`), null);
+      await set(ref(db, `sessions/${sessionId}/records`), null);
+      await set(ref(db, `sessions/${sessionId}/realtimeActions`), null);
+      await set(ref(db, `sessions/${sessionId}/startServerTime`), null);
+      await set(ref(db, `sessions/${sessionId}/finalMeta`), null);
+      alert('強制終了しました。参加者データと記録を削除しました。');
+    } catch(e) {
+      console.error('reset failed', e);
+      alert('強制終了に失敗しました。Console を確認してください。');
+    }
+  }
+
+  // ------------------ Game flow ------------------
+  function showGame(){
+    waitingEl.style.display = 'none';
+    waiting2El.style.display = 'none';
+    gameEl.style.display = 'block';
+    resultEl.style.display = 'none';
+    roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
+    if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    localClicks = [];
+    loadAssetsAndStart();
+    window.addEventListener('keydown', onKeyDown);
+    laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
+  }
+
+  function onKeyDown(e){
+    if (e.code === 'Space') {
+      e.preventDefault();
+      recordLocalClick();
+    }
+  }
+  function onTouchStart(e){
     recordLocalClick();
   }
-}
-function onTouchStart(e){
-  recordLocalClick();
-}
 
-async function loadAssetsAndStart(){
-  if (!assets || !assets['@']) {
-    alert('ベース曲(@)が設定されていません。CONFIG または DB を確認してください。');
-    return;
-  }
-  try {
-    baseAudioBuffer = await fetchAndDecode(assets['@']);
-  } catch (e) {
-    console.error('base load error', e);
-    alert('ベース曲の読み込みに失敗しました（URL確認）');
-    return;
-  }
-  if (assets['miss']) {
-    try { missAudioBuffer = await fetchAndDecode(assets['miss']); } catch(e){ console.warn('miss load failed', e); }
-  }
-  const roleUrl = assets[userRole] && assets[userRole].clipUrl;
-  if (roleUrl) {
-    try { roleAudioBuffer = await fetchAndDecode(roleUrl); } catch(e){ console.warn('role clip load failed', e); }
-  }
-
-  // schedule base playback and set timer to detect end
-  if (startServerTime) {
-    scheduleBasePlaybackAndEndHandler();
-  } else {
-    // listen once for startServerTime
-    const unSub = onValue(sessionRef, snap => {
-      const v = snap.val() || {};
-      if (v.startServerTime && v.status === 'running') {
-        startServerTime = v.startServerTime;
-        scheduleBasePlaybackAndEndHandler();
-        unSub();
-      }
-    });
-  }
-  renderNotesForRole();
-}
-
-function scheduleBasePlaybackAndEndHandler() {
-  if (!audioContext || !baseAudioBuffer || !startServerTime) return;
-  const nowClientMs = Date.now() + serverOffset;
-  const elapsedMs = nowClientMs - startServerTime;
-  const elapsedSec = Math.max(0, elapsedMs/1000);
-
-  if (baseSourceNode) { try { baseSourceNode.disconnect(); } catch(e){} baseSourceNode = null; }
-  baseSourceNode = audioContext.createBufferSource();
-  baseSourceNode.buffer = baseAudioBuffer;
-  baseSourceNode.connect(audioContext.destination);
-
-  if (elapsedSec <= 0) {
-    // start in future
-    baseSourceNode.start(audioContext.currentTime + (-elapsedSec), 0);
-  } else {
-    if (elapsedSec >= baseAudioBuffer.duration) {
-      // already ended
-      onBaseEnded();
+  async function loadAssetsAndStart(){
+    if (!assets || !assets['@']) {
+      alert('ベース曲(@)が設定されていません。CONFIG または DB を確認してください。');
       return;
-    } else {
-      baseSourceNode.start(audioContext.currentTime, elapsedSec);
     }
+    try {
+      baseAudioBuffer = await fetchAndDecode(assets['@']);
+    } catch (e) {
+      console.error('base load error', e);
+      alert('ベース曲の読み込みに失敗しました（URL確認）');
+      return;
+    }
+    if (assets['miss']) {
+      try { missAudioBuffer = await fetchAndDecode(assets['miss']); } catch(e){ console.warn('miss load failed', e); }
+    }
+    const roleUrl = assets[userRole] && assets[userRole].clipUrl;
+    if (roleUrl) {
+      try { roleAudioBuffer = await fetchAndDecode(roleUrl); } catch(e){ console.warn('role clip load failed', e); }
+    }
+
+    if (startServerTime) {
+      scheduleBasePlaybackAndEndHandler();
+    } else {
+      const unSub = onValue(sessionRef, snap => {
+        const v = snap.val() || {};
+        if (v.startServerTime && v.status === 'running') {
+          startServerTime = v.startServerTime;
+          scheduleBasePlaybackAndEndHandler();
+          unSub();
+        }
+      });
+    }
+    renderNotesForRole();
   }
 
-  // set timer until end
-  const remainingMs = (baseAudioBuffer.duration - elapsedSec) * 1000;
-  if (baseEndTimer) clearTimeout(baseEndTimer);
-  baseEndTimer = setTimeout(() => {
-    onBaseEnded();
-  }, Math.max(0, remainingMs + 50));
-}
+  function scheduleBasePlaybackAndEndHandler() {
+    if (!audioContext || !baseAudioBuffer || !startServerTime) return;
+    const nowClientMs = Date.now() + serverOffset;
+    const elapsedMs = nowClientMs - startServerTime;
+    const elapsedSec = Math.max(0, elapsedMs/1000);
 
-function renderNotesForRole() {
-  laneEl.querySelectorAll('.note').forEach(n => n.remove());
-  const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
-  const travelMs = 3000;
-  const baseServerStartMs = startServerTime || (Date.now() + serverOffset);
-  times.forEach((gtime, idx) => {
-    const targetMs = baseServerStartMs + Math.round(gtime*1000);
-    const appearAt = targetMs - travelMs;
-    const div = document.createElement('div');
-    div.className = 'note';
-    div.style.background = (assets[userRole] && assets[userRole].color) || '#444';
-    div.style.color = getContrastYIQ(assets[userRole] && assets[userRole].color || '#444');
-    laneEl.appendChild(div);
-    const animate = () => {
-      const t = Date.now() + serverOffset;
-      const pct = (t - appearAt) / travelMs;
-      if (pct >= 1) {
-        div.style.bottom = `60px`;
-        setTimeout(()=>div.remove(), 1400);
-      } else if (pct <= 0) {
-        div.style.bottom = `calc(100% - 16px)`;
-        requestAnimationFrame(animate);
+    if (baseSourceNode) { try { baseSourceNode.disconnect(); } catch(e){} baseSourceNode = null; }
+    baseSourceNode = audioContext.createBufferSource();
+    baseSourceNode.buffer = baseAudioBuffer;
+    baseSourceNode.connect(audioContext.destination);
+
+    if (elapsedSec <= 0) {
+      baseSourceNode.start(audioContext.currentTime + (-elapsedSec), 0);
+    } else {
+      if (elapsedSec >= baseAudioBuffer.duration) {
+        onBaseEnded();
+        return;
       } else {
+        baseSourceNode.start(audioContext.currentTime, elapsedSec);
+      }
+    }
+
+    const remainingMs = (baseAudioBuffer.duration - elapsedSec) * 1000;
+    if (baseEndTimer) clearTimeout(baseEndTimer);
+    baseEndTimer = setTimeout(() => { onBaseEnded(); }, Math.max(0, remainingMs + 50));
+  }
+
+  function renderNotesForRole() {
+    // create note elements each with data-guide
+    laneEl.querySelectorAll('.note').forEach(n => n.remove());
+    const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+    const travelMs = 3000;
+    const baseServerStartMs = startServerTime || (Date.now() + serverOffset);
+    times.forEach((gtime, idx) => {
+      const targetMs = baseServerStartMs + Math.round(gtime*1000);
+      const appearAt = targetMs - travelMs;
+      const div = document.createElement('div');
+      div.className = 'note';
+      div.dataset.guide = String(gtime);
+      div.dataset.appearAt = String(appearAt);
+      div.dataset.targetAt = String(targetMs);
+      div.style.background = (assets[userRole] && assets[userRole].color) || '#444';
+      div.style.color = getContrastYIQ(assets[userRole] && assets[userRole].color || '#444');
+      laneEl.appendChild(div);
+
+      const animate = () => {
+        const t = Date.now() + serverOffset;
+        const pct = (t - appearAt) / travelMs;
         const laneHeight = laneEl.clientHeight;
         const startY = laneHeight - 16;
         const endY = 60;
-        const y = startY - (startY - endY) * pct;
-        div.style.bottom = `${y}px`;
-        requestAnimationFrame(animate);
+        if (pct >= 1.2) {
+          // move off-screen then remove
+          div.style.opacity = '0';
+          setTimeout(()=>div.remove(), 300);
+          return;
+        } else if (pct <= 0) {
+          div.style.bottom = `${startY}px`;
+          requestAnimationFrame(animate);
+        } else {
+          const y = startY - (startY - endY) * Math.min(pct,1);
+          div.style.bottom = `${y}px`;
+          requestAnimationFrame(animate);
+        }
+      };
+      requestAnimationFrame(animate);
+    });
+  }
+
+  // --- record locally during play; send to DB when base ends ---
+  function recordLocalClick() {
+    if (!startServerTime) { alert('まだ開始されていません'); return; }
+    const clientNow = Date.now();
+    const relativeMs = (clientNow + serverOffset) - startServerTime;
+    const relativeSec = Math.max(0, relativeMs/1000);
+    localClicks.push({ t: relativeSec });
+    const res = evaluateHitAndHandleNote(relativeSec);
+    showTransientText(res === 'perfect' ? 'PERFECT' : 'MISS', res === 'perfect' ? '#8ef27a' : '#ff6b6b');
+    broadcastAction(res === 'perfect' ? 'perfect' : 'miss');
+  }
+
+  // improved hit evaluation and note element handling:
+  function evaluateHitAndHandleNote(relativeSec) {
+    // find closest note element by guide time
+    const notes = Array.from(laneEl.querySelectorAll('.note'));
+    if (!notes.length) {
+      // no visible notes; evaluate pure timing vs guideTimes
+      return evaluateHit(relativeSec);
+    }
+    let bestNote = null;
+    let bestDiff = Infinity;
+    for (const n of notes) {
+      const guide = parseFloat(n.dataset.guide) || 0;
+      const d = Math.abs(guide - relativeSec);
+      if (d < bestDiff) { bestDiff = d; bestNote = n; }
+    }
+    const isPerfect = bestDiff <= 0.5;
+    // compute pct to judge whether note is above (pct<1) or below (pct>1)
+    const appearAt = Number(bestNote.dataset.appearAt);
+    const targetMs = Number(bestNote.dataset.targetAt);
+    const travelMs = targetMs - appearAt;
+    const t = Date.now() + serverOffset;
+    const pct = (t - appearAt) / (travelMs || 1);
+
+    if (isPerfect) {
+      // play role clip and remove this note instantly
+      playRoleClipNow();
+      bestNote.remove();
+      return 'perfect';
+    } else {
+      // miss: if nearest note is below the line (pct>1) remove it (it has passed)
+      if (pct > 1) {
+        bestNote.remove();
       }
-    };
-    requestAnimationFrame(animate);
+      // else leave it as-is (user missed while note was above)
+      playMissClipNow();
+      return 'miss';
+    }
+  }
+
+  function evaluateHit(relativeSec) {
+    const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+    let bestDiff = Infinity;
+    for (const gt of times) {
+      const d = Math.abs(gt - relativeSec);
+      if (d < bestDiff) bestDiff = d;
+    }
+    return bestDiff <= 0.5 ? 'perfect' : 'miss';
+  }
+
+  // ensure role clip plays on perfect (if not loaded, fetch & play)
+  async function playRoleClipNow() {
+    try {
+      if (!roleAudioBuffer && assets[userRole] && assets[userRole].clipUrl) {
+        roleAudioBuffer = await fetchAndDecode(assets[userRole].clipUrl);
+      }
+      if (roleAudioBuffer && audioContext) {
+        const src = audioContext.createBufferSource();
+        src.buffer = roleAudioBuffer;
+        src.connect(audioContext.destination);
+        src.start();
+      }
+    } catch(e) {
+      console.warn('playRoleClipNow failed', e);
+    }
+  }
+  async function playMissClipNow() {
+    try {
+      if (!missAudioBuffer && assets['miss']) {
+        missAudioBuffer = await fetchAndDecode(assets['miss']);
+      }
+      if (missAudioBuffer && audioContext) {
+        const src = audioContext.createBufferSource();
+        src.buffer = missAudioBuffer;
+        src.connect(audioContext.destination);
+        src.start();
+      }
+    } catch(e) {
+      console.warn('playMissClipNow failed', e);
+    }
+  }
+
+  async function broadcastAction(kind) {
+    try {
+      await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), { kind, name: userName || uid, time: serverTimestamp() });
+      setTimeout(async () => {
+        try { await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), null); } catch(e){}
+      }, 900);
+    } catch(e){ console.warn(e); }
+  }
+  onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
+    const v = snap.val() || {};
+    topBallsEl.innerHTML = '';
+    for (const [puid, data] of Object.entries(v)) {
+      if (!data) continue;
+      const b = document.createElement('div');
+      b.className = 'ball';
+      b.textContent = data.kind === 'perfect' ? 'P' : 'X';
+      topBallsEl.appendChild(b);
+    }
   });
-}
 
-// --- 記録: ローカルに貯めて、@ 終了後に送信 ---
-function recordLocalClick() {
-  if (!startServerTime) { alert('まだ開始されていません'); return; }
-  const clientNow = Date.now();
-  const relativeMs = (clientNow + serverOffset) - startServerTime;
-  const relativeSec = Math.max(0, relativeMs/1000);
-  localClicks.push({ t: relativeSec });
-  const res = evaluateHit(relativeSec);
-  showTransientText(res === 'perfect' ? 'PERFECT' : 'MISS', res === 'perfect' ? '#8ef27a' : '#ff6b6b');
-  broadcastAction(res === 'perfect' ? 'perfect' : 'miss');
-}
-
-function evaluateHit(relativeSec) {
-  const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
-  let bestDiff = Infinity;
-  for (const gt of times) {
-    const d = Math.abs(gt - relativeSec);
-    if (d < bestDiff) bestDiff = d;
+  function showTransientText(text, color) {
+    transientTextEl.style.color = color || '#fff';
+    transientTextEl.textContent = text;
+    transientTextEl.style.opacity = '1';
+    setTimeout(()=> { transientTextEl.style.opacity = '0'; }, 700);
   }
-  return bestDiff <= 0.5 ? 'perfect' : 'miss';
-}
 
-// broadcast small real-time action to others
-async function broadcastAction(kind) {
-  try {
-    await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), { kind, name: userName || uid, time: serverTimestamp() });
-    setTimeout(async () => {
-      try { await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), null); } catch(e){}
-    }, 900);
-  } catch(e){ console.warn(e); }
-}
-onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
-  const v = snap.val() || {};
-  topBallsEl.innerHTML = '';
-  for (const [puid, data] of Object.entries(v)) {
-    if (!data) continue;
-    const b = document.createElement('div');
-    b.className = 'ball';
-    b.textContent = data.kind === 'perfect' ? 'P' : 'X';
-    topBallsEl.appendChild(b);
+  // --- base ended: send records and move to waiting2, then wait for others and mix ---
+  async function onBaseEnded() {
+    console.log('🎵 ベース曲が終了');
+    // send localClicks as numbers (seconds)
+    try {
+      await set(ref(db, `sessions/${sessionId}/records/${uid}`), localClicks);
+    } catch(e) { console.warn('send records failed', e); }
+
+    // change UI: go to waiting2 (pseudo waiting room)
+    waiting2El.style.display = 'block';
+    waitingEl.style.display = 'none';
+    gameEl.style.display = 'none';
+    waiting2StatusEl.textContent = '全員の記録を集計中…';
+    // set status collecting
+    try { await update(sessionRef, { status: 'collecting' }); } catch(e){}
+
+    // wait for all records and mix
+    await waitForAllRecordsThenMix();
   }
-});
 
-function showTransientText(text, color) {
-  transientTextEl.style.color = color || '#fff';
-  transientTextEl.textContent = text;
-  transientTextEl.style.opacity = '1';
-  setTimeout(()=> { transientTextEl.style.opacity = '0'; }, 700);
-}
+  async function waitForAllRecordsThenMix() {
+    const TIMEOUT_MS = 15000;
+    const startWait = Date.now();
+    while (true) {
+      const snap = await get(sessionRef);
+      const session = snap.val() || {};
+      const players = session.players || {};
+      const expectedUids = Object.keys(players);
+      const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+      for (const r of rolesOrder) {
+        const assigned = Object.values(players || {}).some(p => p.role === r);
+        if (!assigned) expectedUids.push(`__auto_${r}`);
+      }
+      const recordsSnap = (await get(ref(db, `sessions/${sessionId}/records`))).val() || {};
+      const have = Object.keys(recordsSnap || {});
+      const missing = expectedUids.filter(e => !have.includes(e));
+      if (missing.length === 0) {
+        try { await update(sessionRef, { status: 'compiling' }); } catch(e){}
+        waiting2StatusEl.textContent = '合成処理に入る…';
+        const recs = recordsSnap;
+        await clientMixAndProduceMP3(recs, session);
+        try { await update(sessionRef, { status: 'finished', finalMeta: { generatedBy: uid, generatedAt: serverTimestamp() } }); } catch(e){}
+        break;
+      }
+      if (Date.now() - startWait > TIMEOUT_MS) {
+        try { await update(sessionRef, { status: 'compiling' }); } catch(e){}
+        waiting2StatusEl.textContent = 'タイムアウト: 現在ある記録で合成します';
+        const recs = (await get(ref(db, `sessions/${sessionId}/records`))).val() || {};
+        await clientMixAndProduceMP3(recs, session);
+        try { await update(sessionRef, { status: 'finished', finalMeta: { generatedBy: uid, generatedAt: serverTimestamp() } }); } catch(e){}
+        break;
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
 
-// --- ベース終了後の処理: レコード送信 -> 全員の到着を待って合成 ---
-async function onBaseEnded() {
-  // send our localClicks once to DB
-  try {
-    await set(ref(db, `sessions/${sessionId}/records/${uid}`), localClicks);
-  } catch(e) { console.warn('send records failed', e); }
-
-  // update session status to collecting
-  try { await update(sessionRef, { status: 'collecting' }); } catch(e){}
-
-  // wait for all records or timeout
-  await waitForAllRecordsThenMix();
-}
-
-async function waitForAllRecordsThenMix() {
-  const TIMEOUT_MS = 15000; // 15s wait, then proceed
-  const startWait = Date.now();
-  while (true) {
-    const snap = await get(sessionRef);
-    const session = snap.val() || {};
-    const players = session.players || {};
-    const expectedUids = Object.keys(players);
-    // include auto roles __auto_<role>
+  // --- mixing and producing MP3 (clientside) ---
+  async function clientMixAndProduceMP3(allRecords, session) {
+    // synth auto records if missing
     const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
     for (const r of rolesOrder) {
-      const assigned = Object.values(players || {}).some(p => p.role === r);
-      if (!assigned) expectedUids.push(`__auto_${r}`);
+      const assigned = Object.values(session.players || {}).some(p => p.role === r);
+      const autoUid = `__auto_${r}`;
+      if (!assigned && !(allRecords && allRecords[autoUid])) {
+        const guideTimes = (assets[r] && assets[r].guideTimes) || [];
+        allRecords[autoUid] = guideTimes.map(t => ({ t }));
+      }
     }
-    const recordsSnap = (await get(ref(db, `sessions/${sessionId}/records`))) || { val: () => null };
-    const records = (await get(ref(db, `sessions/${sessionId}/records`))).val() || {};
-    const have = Object.keys(records || {});
-    const missing = expectedUids.filter(e => !have.includes(e));
-    if (missing.length === 0) {
-      // ready to mix
-      try { await update(sessionRef, { status: 'compiling' }); } catch(e){}
-      await clientMixAndProduceMP3(records, session);
-      try { await update(sessionRef, { status: 'finished', finalMeta: { generatedBy: uid, generatedAt: serverTimestamp() } }); } catch(e){}
-      break;
+
+    // map uid -> role
+    const uidToRole = {};
+    for (const [puid, pdata] of Object.entries(session.players || {})) uidToRole[puid] = pdata.role;
+    for (const r of rolesOrder) {
+      const autoUid = `__auto_${r}`;
+      if (allRecords[autoUid]) uidToRole[autoUid] = r;
     }
-    if (Date.now() - startWait > TIMEOUT_MS) {
-      // timeout: proceed with what's available (and synthesize auto ones locally if missing)
-      try { await update(sessionRef, { status: 'compiling' }); } catch(e){}
-      // fetch current records again
-      const recs = (await get(ref(db, `sessions/${sessionId}/records`))).val() || {};
-      await clientMixAndProduceMP3(recs, session);
-      try { await update(sessionRef, { status: 'finished', finalMeta: { generatedBy: uid, generatedAt: serverTimestamp() } }); } catch(e){}
-      break;
+
+    // ensure base buffer present
+    if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (!baseAudioBuffer) {
+      try { baseAudioBuffer = await fetchAndDecode(assets['@']); } catch(e){ console.error('base reload failed', e); return; }
     }
-    await new Promise(r => setTimeout(r, 600));
-  }
-}
 
-// mix and produce mp3 locally using OfflineAudioContext + lamejs
-async function clientMixAndProduceMP3(allRecords, session) {
-  // allRecords: object uid -> [{t},...]
-  // session: snapshot data: players, etc.
-  // ensure auto roles present in records (synthesize)
-  const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-  for (const r of rolesOrder) {
-    const assigned = Object.values(session.players || {}).some(p => p.role === r);
-    const autoUid = `__auto_${r}`;
-    if (!assigned && !(allRecords && allRecords[autoUid])) {
-      const guideTimes = (assets[r] && assets[r].guideTimes) || [];
-      allRecords[autoUid] = guideTimes.map(t => ({ t }));
-    }
-  }
-
-  // build list of track items: each uid -> role -> clipUrl
-  const uidToRole = {};
-  for (const [puid, pdata] of Object.entries(session.players || {})) uidToRole[puid] = pdata.role;
-  // for autos:
-  for (const r of rolesOrder) {
-    const autoUid = `__auto_${r}`;
-    if (allRecords[autoUid]) uidToRole[autoUid] = r;
-  }
-
-  // prepare OfflineAudioContext
-  if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  if (!baseAudioBuffer) {
-    try {
-      baseAudioBuffer = await fetchAndDecode(assets['@']);
-    } catch(e){ console.error('base reload failed', e); return; }
-  }
-
-  // compute target duration
-  let maxT = baseAudioBuffer.duration;
-  for (const arr of Object.values(allRecords || {})) {
-    for (const ev of arr) {
-      if (ev.t && ev.t > maxT) maxT = ev.t;
-    }
-  }
-  const sampleRate = 44100;
-  const off = new OfflineAudioContext(2, Math.ceil((maxT + 2) * sampleRate), sampleRate);
-
-  // base
-  const baseSrc = off.createBufferSource();
-  baseSrc.buffer = baseAudioBuffer;
-  baseSrc.connect(off.destination);
-  baseSrc.start(0);
-
-  // for each uid record set, schedule their clip at each recorded time
-  for (const [puid, arr] of Object.entries(allRecords || {})) {
-    const role = uidToRole[puid] || puid.replace('__auto_','');
-    const clipUrl = assets[role] && assets[role].clipUrl;
-    if (!clipUrl) continue;
-    try {
-      const clipBuf = await fetchAndDecode(clipUrl); // decode in main audioContext, but that's fine for offline scheduling
+    // compute max duration
+    let maxT = baseAudioBuffer.duration;
+    for (const arr of Object.values(allRecords || {})) {
       for (const ev of arr) {
-        const t = ev.t || 0;
-        const src = off.createBufferSource();
-        src.buffer = clipBuf;
-        src.connect(off.destination);
-        src.start(t);
+        if (ev.t && ev.t > maxT) maxT = ev.t;
       }
-    } catch (e) {
-      console.warn('clip load failed for', role, e);
-      continue;
     }
+    const sampleRate = 44100;
+    const off = new OfflineAudioContext(2, Math.ceil((maxT + 2) * sampleRate), sampleRate);
+
+    // base
+    const baseSrc = off.createBufferSource();
+    baseSrc.buffer = baseAudioBuffer;
+    baseSrc.connect(off.destination);
+    baseSrc.start(0);
+
+    // schedule clips
+    for (const [puid, arr] of Object.entries(allRecords || {})) {
+      const role = uidToRole[puid] || puid.replace('__auto_','');
+      const clipUrl = assets[role] && assets[role].clipUrl;
+      if (!clipUrl) continue;
+      try {
+        const clipBuf = await fetchAndDecode(clipUrl);
+        for (const ev of arr) {
+          const t = ev.t || 0;
+          const src = off.createBufferSource();
+          src.buffer = clipBuf;
+          src.connect(off.destination);
+          src.start(t);
+        }
+      } catch (e) {
+        console.warn('clip load failed for', role, e);
+        continue;
+      }
+    }
+
+    // render
+    waiting2StatusEl.textContent = '合成中…';
+    try { await loadLameJs(); } catch(e){ console.warn('lamejs load failed', e); }
+    const rendered = await off.startRendering();
+    // encode to mp3
+    const mp3Blob = audioBufferToMp3(rendered);
+    const url = URL.createObjectURL(mp3Blob);
+    // set into waiting2 UI and result UI
+    waiting2Audio.src = url;
+    waiting2Download.style.display = 'inline-block';
+    waiting2Download.dataset.url = url;
+    finalAudioEl.src = url;
+    downloadBtn.dataset.url = url;
+
+    waiting2StatusEl.textContent = '合成完了';
+    // show result controls (waiting2 has playback/download/back)
+    // waiting2 remains visible to give the big status view
   }
 
-  // render
-  const rendered = await off.startRendering();
+  // --- mp3 helpers (lamejs) ---
+  let lameLoaded = false;
+  async function loadLameJs() {
+    if (lameLoaded) return;
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.0/lame.min.js';
+      s.onload = () => { lameLoaded = true; resolve(); };
+      s.onerror = (e) => { console.warn('lamejs load failed', e); reject(e); };
+      document.head.appendChild(s);
+    });
+  }
 
-  // convert rendered AudioBuffer to MP3 using lamejs
-  // load lamejs from CDN
-  await loadLameJs();
-  const mp3Blob = audioBufferToMp3(rendered);
-  // create object URL and set audio src
-  const url = URL.createObjectURL(mp3Blob);
-  finalAudioEl.src = url;
-  // attach to download button via data attribute
-  downloadBtn.dataset.url = url;
-  // (session finalMeta updated earlier)
-
-  // finished: show result UI
-  showResult(url);
-}
-
-// ------- MP3 encoding (lamejs) -------
-let lameLoaded = false;
-async function loadLameJs() {
-  if (lameLoaded) return;
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.0/lame.min.js';
-    s.onload = () => { lameLoaded = true; resolve(); };
-    s.onerror = (e) => { console.warn('lamejs load failed', e); reject(e); };
-    document.head.appendChild(s);
-  });
-}
-
-function audioBufferToMp3(audioBuffer) {
-  // convert to interleaved PCM16 and encode with lamejs
-  const left = audioBuffer.getChannelData(0);
-  const right = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : left;
-  const samples = interleaveFloat32(left, right);
-  // convert float32 [-1,1] to 16-bit PCM
-  const mp3encoder = new lamejs.Mp3Encoder(2, audioBuffer.sampleRate, 128);
-  const mp3Data = [];
-  const sampleBlockSize = 1152;
-  let idx = 0;
-  while (idx < samples.length) {
-    const leftChunk = [];
-    const rightChunk = [];
-    for (let i=0;i<sampleBlockSize && idx < samples.length;i++, idx+=2) {
-      leftChunk.push(samples[idx]);
-      rightChunk.push(samples[idx+1]);
+  function audioBufferToMp3(audioBuffer) {
+    if (!lameLoaded || typeof lamejs === 'undefined') {
+      // fallback: return WAV blob if lamejs not available
+      const wav = audioBufferToWav(audioBuffer);
+      return wav;
     }
-    // convert to 16-bit PCM
-    const left16 = floatTo16BitPCMArray(leftChunk);
-    const right16 = floatTo16BitPCMArray(rightChunk);
-    const mp3buf = mp3encoder.encodeBuffer(left16, right16);
+    const left = audioBuffer.getChannelData(0);
+    const right = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : left;
+    const samples = interleaveFloat32(left, right);
+    const mp3encoder = new lamejs.Mp3Encoder(2, audioBuffer.sampleRate, 128);
+    const mp3Data = [];
+    const sampleBlockSize = 1152;
+    let idx = 0;
+    // convert float32 [-1,1] to 16-bit PCM on the fly
+    while (idx < samples.length) {
+      const leftChunk = [];
+      const rightChunk = [];
+      for (let i=0;i<sampleBlockSize && idx < samples.length;i+=2) {
+        leftChunk.push(samples[idx]); rightChunk.push(samples[idx+1]); idx+=2;
+      }
+      const left16 = floatTo16BitPCMArray(leftChunk);
+      const right16 = floatTo16BitPCMArray(rightChunk);
+      const mp3buf = mp3encoder.encodeBuffer(left16, right16);
+      if (mp3buf.length > 0) mp3Data.push(mp3buf);
+    }
+    const mp3buf = mp3encoder.flush();
     if (mp3buf.length > 0) mp3Data.push(mp3buf);
+    return new Blob(mp3Data, { type: 'audio/mp3' });
   }
-  const mp3buf = mp3encoder.flush();
-  if (mp3buf.length > 0) mp3Data.push(mp3buf);
-  const blob = new Blob(mp3Data, { type: 'audio/mp3' });
-  return blob;
-}
-function interleaveFloat32(left, right) {
-  const length = left.length + right.length;
-  const result = new Float32Array(length);
-  let index = 0, inputIndex = 0;
-  while (inputIndex < left.length) {
-    result[index++] = left[inputIndex];
-    result[index++] = right[inputIndex];
-    inputIndex++;
+
+  function interleaveFloat32(left, right) {
+    const length = left.length + right.length;
+    const result = new Float32Array(length);
+    let index = 0, inputIndex = 0;
+    while (inputIndex < left.length) {
+      result[index++] = left[inputIndex];
+      result[index++] = right[inputIndex];
+      inputIndex++;
+    }
+    return result;
   }
-  return result;
-}
-function floatTo16BitPCMArray(float32Array) {
-  const out = new Int16Array(float32Array.length);
-  for (let i=0;i<float32Array.length;i++){
-    let s = Math.max(-1, Math.min(1, float32Array[i]));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  function floatTo16BitPCMArray(float32Array) {
+    const out = new Int16Array(float32Array.length);
+    for (let i=0;i<float32Array.length;i++){
+      let s = Math.max(-1, Math.min(1, float32Array[i]));
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return out;
   }
-  return out;
-}
 
-// --- helper: fetch + decode via AudioContext (main) ---
-async function fetchAndDecode(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('fetch failed: ' + res.status);
-  const ab = await res.arrayBuffer();
-  // decode in a temporary AudioContext if main not exist
-  if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  return await audioContext.decodeAudioData(ab);
-}
+  // --- fetch & decode ---
+  async function fetchAndDecode(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('fetch failed: ' + res.status);
+    const ab = await res.arrayBuffer();
+    if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    return await audioContext.decodeAudioData(ab);
+  }
 
-// --- download handler (button) ---
-function onDownloadMP3() {
-  const url = downloadBtn.dataset.url;
-  if (!url) return alert('生成された音声がありません');
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'gassaku.mp3';
-  a.click();
-}
+  // --- download handlers ---
+  function onDownloadMP3() {
+    const url = downloadBtn.dataset.url;
+    if (!url) return alert('生成された音声がありません');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gassaku.mp3';
+    a.click();
+  }
+  function onDownloadWaiting2MP3() {
+    const url = waiting2Download.dataset.url;
+    if (!url) return alert('生成された音声がありません');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gassaku.mp3';
+    a.click();
+  }
 
-// --- server time ping ---
-async function estimateServerOffset() {
-  const rand = Math.random().toString(36).slice(2, 8);
-  const pings = [];
-  for (let i=0;i<6;i++){
-    const t0 = Date.now();
-    const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
+  // --- server time ping ---
+  async function estimateServerOffset() {
+    const rand = Math.random().toString(36).slice(2, 8);
+    const pings = [];
+    for (let i=0;i<6;i++){
+      const t0 = Date.now();
+      const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
+      try {
+        await set(tempRef, {ts: serverTimestamp()});
+        const snap = await get(tempRef);
+        const serverTs = snap.val() && snap.val().ts;
+        const t1 = Date.now();
+        if (serverTs) {
+          const rtt = t1 - t0;
+          const offset = serverTs - (t0 + rtt/2);
+          pings.push(offset);
+        }
+      } catch(e) { console.warn('ping failed', e); }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (pings.length) {
+      pings.sort((a,b)=>a-b);
+      serverOffset = pings[Math.floor(pings.length/2)];
+      console.log('serverOffset', serverOffset);
+    } else serverOffset = 0;
+  }
+
+  // --- misc utils ---
+  function getContrastYIQ(hexcolor){
     try {
-      await set(tempRef, {ts: serverTimestamp()});
-      const snap = await get(tempRef);
-      const serverTs = snap.val() && snap.val().ts;
-      const t1 = Date.now();
-      if (serverTs) {
-        const rtt = t1 - t0;
-        const offset = serverTs - (t0 + rtt/2);
-        pings.push(offset);
-      }
-    } catch(e) { console.warn('ping failed', e); }
-    await new Promise(r => setTimeout(r, 50));
+      if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
+      const r = parseInt(hexcolor.substr(1,2),16);
+      const g = parseInt(hexcolor.substr(3,2),16);
+      const b = parseInt(hexcolor.substr(5,2),16);
+      const yiq = ((r*299)+(g*587)+(b*114))/1000;
+      return (yiq >= 128) ? '#000' : '#fff';
+    } catch(e){ return '#fff'; }
   }
-  if (pings.length) {
-    pings.sort((a,b)=>a-b);
-    serverOffset = pings[Math.floor(pings.length/2)];
-    console.log('serverOffset', serverOffset);
-  } else serverOffset = 0;
-}
+  function adjustLaneHeight(){
+    const h = Math.max(360, window.innerHeight * 0.62);
+    laneEl.style.height = `${h}px`;
+  }
 
-// --- misc utils ---
-function getContrastYIQ(hexcolor){
-  try {
-    if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
-    const r = parseInt(hexcolor.substr(1,2),16);
-    const g = parseInt(hexcolor.substr(3,2),16);
-    const b = parseInt(hexcolor.substr(5,2),16);
-    const yiq = ((r*299)+(g*587)+(b*114))/1000;
-    return (yiq >= 128) ? '#000' : '#fff';
-  } catch(e){ return '#fff'; }
-}
-function adjustLaneHeight(){
-  const h = Math.max(360, window.innerHeight * 0.62);
-  laneEl.style.height = `${h}px`;
-}
+  // --- audioBuffer -> WAV fallback (if lame not available) ---
+  function audioBufferToWav(buffer, opt) {
+    opt = opt || {};
+    var numChannels = buffer.numberOfChannels;
+    var sampleRate = buffer.sampleRate;
+    var format = opt.float32 ? 3 : 1;
+    var bitDepth = format === 3 ? 32 : 16;
+    var result;
+    if (numChannels === 2) {
+      result = interleave(buffer.getChannelData(0), buffer.getChannelData(1));
+    } else {
+      result = buffer.getChannelData(0);
+    }
+    return encodeWAV(result, format, sampleRate, numChannels, bitDepth);
+  }
+  function interleave(inputL, inputR){
+    var length = inputL.length + inputR.length;
+    var result = new Float32Array(length);
+    var index = 0, inputIndex = 0;
+    while (index < length){
+      result[index++] = inputL[inputIndex];
+      result[index++] = inputR[inputIndex];
+      inputIndex++;
+    }
+    return result;
+  }
+  function encodeWAV(samples, format, sampleRate, numChannels, bitDepth){
+    var bytesPerSample = bitDepth / 8;
+    var blockAlign = numChannels * bytesPerSample;
+    var buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    var view = new DataView(buffer);
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format === 3 ? 3 : 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * bytesPerSample, true);
+    if (format === 1) {
+      floatTo16BitPCM(view, 44, samples);
+    } else {
+      writeFloat32(view, 44, samples);
+    }
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+  function floatTo16BitPCM(output, offset, input){
+    for (var i = 0; i < input.length; i++, offset += 2){
+      var s = Math.max(-1, Math.min(1, input[i]));
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+  }
+  function writeFloat32(output, offset, input){
+    for (var i = 0; i < input.length; i++, offset += 4){
+      output.setFloat32(offset, input[i], true);
+    }
+  }
+  function writeString(view, offset, string){
+    for (var i = 0; i < string.length; i++){
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
 
+  // ------------------ End of script ------------------
   </script>
 </body>
 </html>
