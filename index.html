@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>合作音ゲー（統合版）</title>
+  <title>合作音ゲー（統合版：管理UI追加）</title>
   <style>
-    body{font-family: system-ui, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
+    body{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "メイリオ", sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
     #top{padding:12px; display:flex; gap:8px; align-items:center; background:#fff; border-bottom:1px solid #ddd}
     #waiting,#game,#result{display:none; padding:12px}
     .role { padding:6px; border-radius:6px; margin:4px; display:inline-block; min-width:120px; white-space:pre-line}
@@ -18,7 +18,13 @@
     #roleTitle{margin-bottom:8px}
     button{cursor:pointer}
     .small{font-size:12px; color:#666}
-    input[type="text"]{padding:6px}
+    input[type="text"], input[type="url"], textarea {padding:6px}
+    .adminPanel{border:1px solid #ddd; background:#fff; padding:10px; border-radius:8px; margin-top:12px}
+    .adminRow{display:flex; gap:8px; align-items:center; margin-bottom:8px}
+    .adminRow label{width:110px; font-size:13px}
+    .rolesTable{width:100%; border-collapse:collapse; margin-top:8px}
+    .rolesTable th, .rolesTable td{padding:6px; border:1px solid #eee; font-size:13px}
+    .smallBtn{font-size:12px; padding:4px 8px}
   </style>
 </head>
 <body>
@@ -27,6 +33,7 @@
     <div style="margin-left:auto; display:flex; align-items:center; gap:8px">
       <div class="small">運営パス</div>
       <input id="adminPw" placeholder="1122" style="width:110px; padding:6px"/>
+      <button id="toggleAdmin" class="smallBtn">管理画面を開く</button>
     </div>
   </div>
 
@@ -36,6 +43,61 @@
     <div id="topBalls"></div>
     <div id="controls">
       <button id="startBtn" style="display:none">開始（運営のみ）</button>
+    </div>
+
+    <!-- 管理パネル（運営のみ可視） -->
+    <div id="adminPanel" class="adminPanel" style="display:none">
+      <h4>運営：＠ / 音源 / 役割 を追加・編集</h4>
+
+      <div class="adminRow">
+        <label>ベース曲 (@)</label>
+        <input id="baseUrl" type="url" placeholder="https://.../kyoku.mp3" style="flex:1"/>
+        <button id="saveBaseBtn" class="smallBtn">保存</button>
+        <button id="playBaseBtn" class="smallBtn">再生</button>
+      </div>
+
+      <div class="adminRow">
+        <label>miss 音</label>
+        <input id="missUrl" type="url" placeholder="https://.../miss.mp3" style="flex:1"/>
+        <button id="saveMissBtn" class="smallBtn">保存</button>
+        <button id="playMissBtn" class="smallBtn">再生</button>
+      </div>
+
+      <hr/>
+
+      <h5>役割（A〜など）を追加 / 編集</h5>
+      <div class="adminRow">
+        <label>アルファベット</label>
+        <input id="roleKey" type="text" placeholder="A" style="width:80px"/>
+        <label>色</label>
+        <input id="roleColor" type="text" placeholder="#FF6666" style="width:110px"/>
+      </div>
+      <div class="adminRow">
+        <label>音源URL</label>
+        <input id="roleClipUrl" type="url" placeholder="https://.../A_note.mp3" style="flex:1"/>
+        <button id="playRoleClip" class="smallBtn">試聴</button>
+      </div>
+      <div class="adminRow">
+        <label>指標時間 (複数可)</label>
+        <textarea id="roleGuideTimes" placeholder="例: 3:00.23, 2:42.32, 180.23 などをカンマ区切りで" style="flex:1; height:64px"></textarea>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:6px">
+        <button id="addOrUpdateRoleBtn" class="smallBtn">追加 / 更新</button>
+        <button id="clearRoleFormBtn" class="smallBtn">フォームクリア</button>
+      </div>
+
+      <div style="margin-top:12px">
+        <strong>既存の役割</strong>
+        <table class="rolesTable" id="rolesTable">
+          <thead><tr><th>Key</th><th>色</th><th>clipUrl</th><th>guideTimes</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:12px" class="small">
+        - 指標時間のフォーマットは複数対応します: HH:MM:SS(.ms)、MM:SS(.ms)、MM:SS:ms、または秒の小数（例: 180.23）。解析して秒に変換します。<br>
+        - 保存すると Realtime Database の sessions/{sessionId}/assets と rolesOrder を更新します。<br>
+      </div>
     </div>
   </div>
 
@@ -88,17 +150,37 @@
     let startServerTime = null;
     let serverOffset = 0; // ms: serverTime - (Date.now() + RTT/2)
     let assets = null;
-    let audioContext = null;
     let baseAudioBuffer = null;
     let roleAudioBuffer = null;
     let missAudioBuffer = null;
     let localClicks = []; // [{t: seconds}, ...]
+    let audioContext = null;
     let currentSessionSnapshot = null;
 
-    // --- DOM ---
+    // --- DOM Elements ---
     const joinBtn = document.getElementById('joinBtn');
     const startBtn = document.getElementById('startBtn');
     const adminPwInput = document.getElementById('adminPw');
+    const toggleAdminBtn = document.getElementById('toggleAdmin');
+    const adminPanelEl = document.getElementById('adminPanel');
+
+    const baseUrlInput = document.getElementById('baseUrl');
+    const saveBaseBtn = document.getElementById('saveBaseBtn');
+    const playBaseBtn = document.getElementById('playBaseBtn');
+
+    const missUrlInput = document.getElementById('missUrl');
+    const saveMissBtn = document.getElementById('saveMissBtn');
+    const playMissBtn = document.getElementById('playMissBtn');
+
+    const roleKeyInput = document.getElementById('roleKey');
+    const roleColorInput = document.getElementById('roleColor');
+    const roleClipUrlInput = document.getElementById('roleClipUrl');
+    const roleGuideTimesInput = document.getElementById('roleGuideTimes');
+    const addOrUpdateRoleBtn = document.getElementById('addOrUpdateRoleBtn');
+    const clearRoleFormBtn = document.getElementById('clearRoleFormBtn');
+    const rolesTableBody = document.querySelector('#rolesTable tbody');
+    const playRoleClipBtn = document.getElementById('playRoleClip');
+
     const rolesListEl = document.getElementById('rolesList');
     const waitingEl = document.getElementById('waiting');
     const gameEl = document.getElementById('game');
@@ -124,6 +206,21 @@
         waitingEl.style.display = 'block';
       });
 
+      toggleAdminBtn.addEventListener('click', () => {
+        const visible = adminPanelEl.style.display !== 'none';
+        adminPanelEl.style.display = visible ? 'none' : 'block';
+      });
+      adminPwInput.addEventListener('input', () => { evaluateAdmin(); });
+
+      // admin panel actions
+      saveBaseBtn.addEventListener('click', saveBaseAsset);
+      playBaseBtn.addEventListener('click', () => testPlayUrl(baseUrlInput.value));
+      saveMissBtn.addEventListener('click', saveMissAsset);
+      playMissBtn.addEventListener('click', () => testPlayUrl(missUrlInput.value));
+      playRoleClipBtn.addEventListener('click', () => testPlayUrl(roleClipUrlInput.value));
+      addOrUpdateRoleBtn.addEventListener('click', addOrUpdateRole);
+      clearRoleFormBtn.addEventListener('click', clearRoleForm);
+
       // DB を監視して UI を更新
       onValue(sessionRef, snapshot => {
         const v = snapshot.val();
@@ -145,14 +242,181 @@
         }
       });
 
+      // realtimeActions 監視（他者のアクションを表示）
+      onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
+        const v = snap.val() || {};
+        topBallsEl.innerHTML = '';
+        for (const [puid, data] of Object.entries(v)) {
+          if (!data) continue;
+          const b = document.createElement('div');
+          b.className = 'ball';
+          b.textContent = data.kind === 'perfect' ? 'P' : 'X';
+          topBallsEl.appendChild(b);
+        }
+      });
+
       // server offset 推定
       await estimateServerOffset();
     })();
 
-    // --- UI / DB 操作 ---
+    // --- 管理（Admin）関連 ---
+    function evaluateAdmin() {
+      isAdmin = adminPwInput.value === '1122';
+      adminPanelEl.style.display = isAdmin ? 'block' : 'none';
+      startBtn.style.display = isAdmin ? 'inline-block' : 'none';
+      // populate admin form with current assets if admin
+      if (isAdmin && assets) {
+        baseUrlInput.value = assets['@'] || '';
+        missUrlInput.value = assets['miss'] || '';
+        populateRolesTable();
+      }
+    }
+
+    async function saveBaseAsset(){
+      const url = baseUrlInput.value.trim();
+      if (!url) { alert('@ の URL を入力してください'); return; }
+      const s = await get(sessionRef);
+      const sess = s.val() || {};
+      const newAssets = sess.assets || {};
+      newAssets['@'] = url;
+      await update(sessionRef, { assets: newAssets });
+      alert('ベース曲(@)を保存しました');
+    }
+    async function saveMissAsset(){
+      const url = missUrlInput.value.trim();
+      if (!url) { alert('miss 音の URL を入力してください'); return; }
+      const s = await get(sessionRef);
+      const sess = s.val() || {};
+      const newAssets = sess.assets || {};
+      newAssets['miss'] = url;
+      await update(sessionRef, { assets: newAssets });
+      alert('miss 音を保存しました');
+    }
+
+    async function addOrUpdateRole(){
+      const key = (roleKeyInput.value || '').trim();
+      if (!key) { alert('アルファベットを入力してください (例: A)'); return; }
+      const color = (roleColorInput.value || '').trim() || '#777';
+      const clipUrl = (roleClipUrlInput.value || '').trim();
+      if (!clipUrl) { if(!confirm('clipUrl が空です。保存しますか？')) return; }
+      const rawTimes = roleGuideTimesInput.value || '';
+      const guideTimes = parseGuideTimesList(rawTimes);
+
+      // read current session
+      const snap = await get(sessionRef);
+      const sess = snap.val() || {};
+      const newAssets = sess.assets || {};
+      newAssets[key] = { clipUrl: clipUrl, color: color, guideTimes: guideTimes };
+      // rolesOrder update: append if not exists
+      const rolesOrder = Array.isArray(sess.rolesOrder) ? sess.rolesOrder.slice() : Object.keys(newAssets).filter(k => k !== '@' && k !== 'miss');
+      if (!rolesOrder.includes(key)) rolesOrder.push(key);
+      await update(sessionRef, { assets: newAssets, rolesOrder: rolesOrder });
+      alert(`役割 ${key} を保存しました`);
+      clearRoleForm();
+    }
+
+    function parseGuideTimesList(raw){
+      // カンマや改行で分割、空白トリム、parseTimeで秒(float)に
+      const parts = raw.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
+      const out = [];
+      for (const p of parts) {
+        const v = parseTimeToSeconds(p);
+        if (!isNaN(v)) out.push(Number(v.toFixed(3)));
+      }
+      return out;
+    }
+
+    function parseTimeToSeconds(s){
+      // 対応例:
+      // "3:00.23" -> 3分 0.23s => 180.23
+      // "2:42:32" -> 2分 42.32s? or H:M:S ambiguous.
+      // We'll support: H:MM:SS(.ms), MM:SS(.ms), MM:SS:ms (treat last as decimal fraction if contains '.' else treat as seconds), and plain seconds float.
+      if (!s) return NaN;
+      s = s.trim();
+      if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s); // seconds as float
+      const cols = s.split(':').map(x => x.trim()).filter(Boolean);
+      if (cols.length === 1) return parseFloat(cols[0]) || NaN;
+      if (cols.length === 2) {
+        // MM:SS(.ms) or MM:SS:ms style with dot
+        const m = parseInt(cols[0],10);
+        const sec = parseFloat(cols[1].replace(',', '.'));
+        if (isNaN(m) || isNaN(sec)) return NaN;
+        return m*60 + sec;
+      }
+      if (cols.length >= 3) {
+        // treat as H:MM:SS(.ms) or MM:SS:ms (if first small treat hours)
+        const parts = cols.map(x => x.replace(',', '.'));
+        const h = parseInt(parts[0],10);
+        const mm = parseInt(parts[1],10);
+        let ss = parseFloat(parts.slice(2).join(':')); // join rest as seconds part (handles "32" or "32.12")
+        if (isNaN(h) || isNaN(mm) || isNaN(ss)) {
+          // fallback: if format like 3:00:23 (maybe mm:ss:cs) -> treat first as minutes, second as seconds, third as centiseconds
+          // try alternative: first -> minutes, second-> seconds, third -> centiseconds
+          const m = parseInt(parts[0],10);
+          const s2 = parseInt(parts[1],10);
+          const cs = parseInt(parts[2],10);
+          if (!isNaN(m) && !isNaN(s2) && !isNaN(cs)) {
+            // treat cs as fractional part (two digits -> /100, three digits -> /1000)
+            let denom = 100;
+            if (parts[2].length === 3) denom = 1000;
+            return m*60 + s2 + cs/denom;
+          }
+          return NaN;
+        }
+        return h*3600 + mm*60 + ss;
+      }
+      return NaN;
+    }
+
+    function clearRoleForm(){
+      roleKeyInput.value = '';
+      roleColorInput.value = '';
+      roleClipUrlInput.value = '';
+      roleGuideTimesInput.value = '';
+    }
+
+    async function populateRolesTable(){
+      rolesTableBody.innerHTML = '';
+      const sess = currentSessionSnapshot || {};
+      const a = sess.assets || {};
+      const keys = Object.keys(a).filter(k => k !== '@' && k !== 'miss').sort();
+      for (const key of keys) {
+        const info = a[key] || {};
+        const tr = document.createElement('tr');
+        const tdKey = document.createElement('td'); tdKey.textContent = key;
+        const tdColor = document.createElement('td'); tdColor.textContent = info.color || ''; tdColor.style.background = info.color || '';
+        const tdClip = document.createElement('td'); tdClip.textContent = info.clipUrl || '';
+        const tdTimes = document.createElement('td'); tdTimes.textContent = (info.guideTimes || []).join(', ');
+        const tdOps = document.createElement('td');
+        const editBtn = document.createElement('button'); editBtn.textContent = '編集'; editBtn.className='smallBtn';
+        editBtn.addEventListener('click', () => {
+          roleKeyInput.value = key;
+          roleColorInput.value = info.color || '';
+          roleClipUrlInput.value = info.clipUrl || '';
+          roleGuideTimesInput.value = (info.guideTimes || []).map(x => Number(x).toFixed(3)).join(', ');
+        });
+        const delBtn = document.createElement('button'); delBtn.textContent = '削除'; delBtn.className='smallBtn';
+        delBtn.addEventListener('click', async () => {
+          if (!confirm(`役割 ${key} を本当に削除しますか？`)) return;
+          const snap = await get(sessionRef);
+          const sess2 = snap.val() || {};
+          const newAssets = sess2.assets || {};
+          delete newAssets[key];
+          let rolesOrder = Array.isArray(sess2.rolesOrder) ? sess2.rolesOrder.filter(r => r !== key) : Object.keys(newAssets).filter(k => k !== '@' && k !== 'miss');
+          await update(sessionRef, { assets: newAssets, rolesOrder });
+          populateRolesTable();
+        });
+        const testBtn = document.createElement('button'); testBtn.textContent = '試聴'; testBtn.className='smallBtn';
+        testBtn.addEventListener('click', () => testPlayUrl(info.clipUrl));
+        tdOps.appendChild(editBtn); tdOps.appendChild(document.createTextNode(' ')); tdOps.appendChild(testBtn); tdOps.appendChild(document.createTextNode(' ')); tdOps.appendChild(delBtn);
+        tr.appendChild(tdKey); tr.appendChild(tdColor); tr.appendChild(tdClip); tr.appendChild(tdTimes); tr.appendChild(tdOps);
+        rolesTableBody.appendChild(tr);
+      }
+    }
+
+    // --- UI / DB 操作 (参加・割当等) ---
     function updateRolesView(sessionData) {
       rolesListEl.innerHTML = '';
-      // determine roles order: rolesOrder if present, else from assets keys excluding '@' and 'miss'
       const rolesOrder = sessionData.rolesOrder || Object.keys(sessionData.assets || {}).filter(k => k !== '@' && k !== 'miss');
       (rolesOrder).forEach(role => {
         const info = sessionData.assets && sessionData.assets[role];
@@ -172,27 +436,32 @@
         rolesListEl.appendChild(el);
       });
 
-      // 管理者判定（簡易：入力パスワードが1122なら運営とみなす）
+      // 管理者判定
       isAdmin = adminPwInput.value === '1122';
       startBtn.style.display = isAdmin ? 'inline-block' : 'none';
+      adminPanelEl.style.display = isAdmin ? adminPanelEl.style.display : 'none';
+      if (isAdmin) {
+        baseUrlInput.value = sessionData.assets && sessionData.assets['@'] || '';
+        missUrlInput.value = sessionData.assets && sessionData.assets['miss'] || '';
+        populateRolesTable();
+      }
     }
 
     async function joinFlow(){
       const name = prompt('名前を入力してください');
       if (!name) return;
       userName = name.trim() || '名無し';
-      // 参加者として DB に書き込む。割り振りは簡易クライアントロジック（次の空き or サイクル）
+      // assign next role
       const snap = await get(sessionRef);
       const session = snap.val() || {};
       const players = session.players || {};
       const rolesOrder = session.rolesOrder || Object.keys(session.assets || {}).filter(k => k !== '@' && k !== 'miss');
-      // assigned roles list
       const assigned = Object.values(players).map(p => p.role);
       let roleToAssign = null;
       for (const r of rolesOrder) {
         if (!assigned.includes(r)) { roleToAssign = r; break; }
       }
-      if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
+      if (!roleToAssign) roleToAssign = rolesOrder.length ? rolesOrder[assigned.length % rolesOrder.length] : null;
       const playerRef = ref(db, `sessions/${sessionId}/players/${uid}`);
       await set(playerRef, { name: userName, role: roleToAssign, joinedAt: Date.now() });
       userRole = roleToAssign;
@@ -203,19 +472,17 @@
     }
 
     async function onStartClicked(){
-      // 運営が start を押すと serverTimestamp を書き込む
-      // ここは簡易的にパスワード(1122)での運営チェックを行う（より厳密にしたい場合は ownerUid 管理を実装）
       if (!isAdmin) { alert('運営パスが必要です'); return; }
       await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
     }
 
+    // --- ゲーム開始、ロード、ノーツ表示 ---
     function showGame(){
       waitingEl.style.display = 'none';
       gameEl.style.display = 'block';
       roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
       if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
       loadAssetsAndStart();
-      // 入力イベント
       window.addEventListener('keydown', onKeyDown);
       laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
     }
@@ -236,8 +503,8 @@
         alert('ベース曲(@)がセッションに設定されていません。運営がassetsを設定してください。');
         return;
       }
-      // fetch base audio and role audio
       try {
+        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
         baseAudioBuffer = await fetchAndDecode(assets['@']);
       } catch (e) {
         console.error('base load error', e);
@@ -247,8 +514,6 @@
       missAudioBuffer = assets['miss'] ? await fetchAndDecode(assets['miss']) : null;
       const roleUrl = assets[userRole]?.clipUrl;
       if (roleUrl) roleAudioBuffer = await fetchAndDecode(roleUrl);
-
-      // render notes visually based on assets[userRole].guideTimes
       renderNotesForRole();
     }
 
@@ -263,7 +528,6 @@
       laneEl.querySelectorAll('.note').forEach(n => n.remove());
       const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
       const travelMs = 3000; // ノーツが上から降ってくる所要時間（ミリ秒）
-      // get serverStart in ms (estimate if missing)
       const nowClientMs = Date.now() + serverOffset;
       const baseServerStartMs = startServerTime || nowClientMs;
       times.forEach((gtime, idx) => {
@@ -282,7 +546,6 @@
           const pct = (t - appearAt) / travelMs;
           if (pct >= 1) {
             div.style.bottom = `60px`;
-            // ノーツが判定ライン到達後は数秒後に消える（通り過ぎも考慮）
             setTimeout(()=>div.remove(), 1500);
           } else if (pct <= 0) {
             div.style.bottom = `-40px`;
@@ -308,15 +571,12 @@
         }
       }
       const clientNow = Date.now();
-      // relativeMs: (client time + offset) - startServerTime
       const relativeMs = (clientNow + serverOffset) - startServerTime;
       const relativeSec = Math.max(0, relativeMs/1000);
       playHitSound(relativeSec);
-      // store click to localClicks and DB
       localClicks.push({t: relativeSec});
       try {
         const clicksRef = ref(db, `sessions/${sessionId}/clicks/${uid}`);
-        // set whole array (簡易)。将来的には push を使う方が競合少ない
         await set(clicksRef, localClicks);
       } catch (e) {
         console.error('click write error', e);
@@ -324,7 +584,6 @@
     }
 
     function playHitSound(relativeSec) {
-      // 判定（簡易）：guideTimes と比較して perfect/miss を決定し音再生
       const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
       let best = null, bestDiff = Infinity;
       for (const gt of times) {
@@ -340,34 +599,14 @@
         src.start();
       }
       showTransient(isPerfect ? 'P' : 'X');
-      // small real-time indicator to other clients: write transient to DB for 1s display (optional)
-      // For simplicity here we only show locally; real-time small balls for others require broadcasting an event in DB.
-      // However the UI spec asked for others' actions; we implement a simple broadcast below:
       broadcastAction(isPerfect ? 'perfect' : 'miss');
     }
 
     async function broadcastAction(kind) {
       const tRef = ref(db, `sessions/${sessionId}/realtimeActions/${uid}`);
-      // write a short-lived object with timestamp and kind; other clients should listen and display for ~1s
       await set(tRef, { kind, name: userName || uid, time: serverTimestamp() });
-      // schedule removal locally after small delay (cleanup)
-      setTimeout(async () => {
-        try { await set(tRef, null); } catch(e){ /* ignore */ }
-      }, 1200);
+      setTimeout(async () => { try { await set(tRef, null); } catch(e){} }, 1200);
     }
-
-    // listen realtimeActions to show top balls for anyone's action
-    onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
-      const v = snap.val() || {};
-      topBallsEl.innerHTML = ''; // show all current ones (they auto-clear)
-      for (const [puid, data] of Object.entries(v)) {
-        if (!data) continue;
-        const b = document.createElement('div');
-        b.className = 'ball';
-        b.textContent = data.kind === 'perfect' ? 'P' : 'X';
-        topBallsEl.appendChild(b);
-      }
-    });
 
     function showTransient(txt) {
       const b = document.createElement('div');
@@ -404,12 +643,10 @@
       const sampleRate = 44100;
       const duration = baseAudioBuffer.duration + 1;
       const off = new OfflineAudioContext(2, Math.ceil(duration*sampleRate), sampleRate);
-      // base
       const baseSrc = off.createBufferSource();
       baseSrc.buffer = baseAudioBuffer;
       baseSrc.connect(off.destination);
       baseSrc.start(0);
-      // read clicks and schedule each player's clip at relative times
       const snap = await get(sessionRef);
       const session = snap.val() || {};
       const allClicks = session.clicks || {};
@@ -417,7 +654,6 @@
         const role = session.players && session.players[puid] && session.players[puid].role;
         const clipUrl = session.assets && session.assets[role] && session.assets[role].clipUrl;
         if (!clipUrl) continue;
-        // fetch clip buffer using off.decodeAudioData
         const res = await fetch(clipUrl);
         if (!res.ok) continue;
         const ab = await res.arrayBuffer();
@@ -435,24 +671,21 @@
       return new Blob([wavBuf], {type: 'audio/wav'});
     }
 
-    // --- ユーティリティ: AudioBuffer -> WAV (same asプロトタイプ) ---
+    // --- ユーティリティ: AudioBuffer -> WAV ---
     function audioBufferToWav(buffer, opt) {
       opt = opt || {}
       var numChannels = buffer.numberOfChannels
       var sampleRate = buffer.sampleRate
       var format = opt.float32 ? 3 : 1
       var bitDepth = format === 3 ? 32 : 16
-
       var result
       if (numChannels === 2) {
         result = interleave(buffer.getChannelData(0), buffer.getChannelData(1))
       } else {
         result = buffer.getChannelData(0)
       }
-
       return encodeWAV(result, format, sampleRate, numChannels, bitDepth)
     }
-
     function interleave(inputL, inputR){
       var length = inputL.length + inputR.length
       var result = new Float32Array(length)
@@ -465,7 +698,6 @@
       }
       return result
     }
-
     function encodeWAV(samples, format, sampleRate, numChannels, bitDepth){
       var bytesPerSample = bitDepth / 8
       var blockAlign = numChannels * bytesPerSample
@@ -491,27 +723,43 @@
       }
       return buffer
     }
-
     function floatTo16BitPCM(output, offset, input){
       for (var i = 0; i < input.length; i++, offset += 2){
         var s = Math.max(-1, Math.min(1, input[i]))
         output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
       }
     }
-
     function writeFloat32(output, offset, input){
       for (var i = 0; i < input.length; i++, offset += 4){
         output.setFloat32(offset, input[i], true)
       }
     }
-
     function writeString(view, offset, string){
       for (var i = 0; i < string.length; i++){
         view.setUint8(offset + i, string.charCodeAt(i))
       }
     }
 
-    // --- server time offset 推定（複数 ping の中央値） ---
+    // --- 補助: Test play URL (admin) ---
+    async function testPlayUrl(url){
+      if (!url) { alert('URL を入力してください'); return; }
+      try {
+        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('fetch failed');
+        const ab = await res.arrayBuffer();
+        const buf = await audioContext.decodeAudioData(ab);
+        const src = audioContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioContext.destination);
+        src.start();
+      } catch (e) {
+        console.error(e);
+        alert('試聴に失敗しました: ' + e.message);
+      }
+    }
+
+    // --- server time offset 推定 ---
     async function estimateServerOffset() {
       const rand = Math.random().toString(36).slice(2, 8);
       const pings = [];
@@ -538,11 +786,10 @@
       }
     }
 
-    // --- 補助関数 ---
+    // --- ユーティリティ ---
     function getContrastYIQ(hexcolor){
-      // hexcolor like "#RRGGBB" or color string fallback
       try {
-        if (!hexcolor.startsWith('#')) return '#fff';
+        if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
         const r = parseInt(hexcolor.substr(1,2),16);
         const g = parseInt(hexcolor.substr(3,2),16);
         const b = parseInt(hexcolor.substr(5,2),16);
@@ -551,20 +798,16 @@
       } catch(e){ return '#fff'; }
     }
 
-    // --- リアルタイム: 他クライアントのアクションを1秒表示するロジック（DB側のrealtimeActionsを監視） ---
-    // この部分は onValue(session/realtimeActions) で実装済み（上）
+    // --- 注意メモ ---
+    // - 管理パネルはクライアント上の簡易パスワード(1122)で表示を切り替えます。本番では DB ルールで ownerUid 等による厳格チェックを行ってください。
+    // - Admin が保存すると sessions/{sessionId}/assets と rolesOrder が更新されます。
+    // - assets には:
+    //   assets.@ = "https://.../kyoku.mp3"
+    //   assets.miss = "https://.../miss.mp3"
+    //   assets.A = { clipUrl: "...", color: "#FF6666", guideTimes: [180.23, 162.42] }
+    // - guideTimes は秒（float）で保存されます（所望の時間フォーマットをパースします）。
+    // - 既存の機能は壊さない形で admin の編集機能を追加しました。
 
-    // --- 注意・運用メモ（簡潔） ---
-    // - 事前に Realtime Database の sessions/<sessionId>/assets に以下のように設定しておくこと:
-    //   assets:
-    //     @: "https://.../kyoku.mp3"   <-- ベース曲（必須）
-    //     miss: "https://.../miss.mp3"
-    //     A: { clipUrl: "https://.../A_note.mp3", color: "#FF6666", guideTimes: [180.23, 162.42] }
-    //     B: { ... }
-    // - また sessions/<sessionId>/rolesOrder を入れておくと割り当て順を制御できます。
-    // - Storage にアップした音源は公開URLで指定するか、署名付きURLを使ってください。
-    // - セキュリティルール：本コードはデモ段階なので、本番では write 制限（players は auth.uid のみ、startServerTime は運営のみ等）を強く推奨します。
-    // - 合成（MP3出力）をサーバ化する場合は Cloud Run + ffmpeg を使うと安定します（本ファイルはクライアント合成（WAV出力）に対応）。
   </script>
 </body>
 </html>
