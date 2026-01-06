@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>合作音ゲー（統合版）</title>
+  <style>
+    body{font-family: system-ui, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
+    #top{padding:12px; display:flex; gap:8px; align-items:center; background:#fff; border-bottom:1px solid #ddd}
+    #waiting,#game,#result{display:none; padding:12px}
+    .role { padding:6px; border-radius:6px; margin:4px; display:inline-block; min-width:120px; white-space:pre-line}
+    #lane{position:relative; height:300px; background:#111; color:white; overflow:hidden; border-radius:8px}
+    .note{ position:absolute; left:50%; transform:translateX(-50%); width:80%; height:30px; border-radius:6px; text-align:center; line-height:30px; font-size:14px; opacity:0.95}
+    #topBalls{display:flex; gap:6px; margin-top:6px; flex-wrap:wrap}
+    .ball{width:34px; height:34px; border-radius:50%; background:#999; display:flex; align-items:center; justify-content:center; color:white; font-size:12px}
+    #controls{position:fixed; right:12px; bottom:12px; z-index:999}
+    #rolesList{display:flex; flex-wrap:wrap; gap:8px}
+    #roleTitle{margin-bottom:8px}
+    button{cursor:pointer}
+    .small{font-size:12px; color:#666}
+    input[type="text"]{padding:6px}
+  </style>
+</head>
+<body>
+  <div id="top">
+    <button id="joinBtn">参加</button>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:8px">
+      <div class="small">運営パス</div>
+      <input id="adminPw" placeholder="1122" style="width:110px; padding:6px"/>
+    </div>
+  </div>
+
+  <div id="waiting">
+    <h3>待機中…</h3>
+    <div id="rolesList"></div>
+    <div id="topBalls"></div>
+    <div id="controls">
+      <button id="startBtn" style="display:none">開始（運営のみ）</button>
+    </div>
+  </div>
+
+  <div id="game">
+    <h3 id="roleTitle"></h3>
+    <div id="lane">
+      <div id="judgeLine" style="position:absolute; bottom:60px; left:0; right:0; height:4px; background:rgba(255,255,255,0.5)"></div>
+    </div>
+    <p>スペースキー／タップで判定（perfect: ±0.5s）</p>
+  </div>
+
+  <div id="result">
+    <h3>完成！</h3>
+    <audio id="finalAudio" controls></audio>
+    <div style="margin-top:8px">
+      <button id="downloadBtn">保存（WAV）</button>
+      <button id="backBtn">戻る（待機へ）</button>
+    </div>
+  </div>
+
+  <!-- Firebase + アプリ本体を1ファイルに統合 -->
+  <script type="module">
+    // --- Firebase 初期化 ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+    import { getDatabase, ref, onValue, set, push, update, get, child, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
+      authDomain: "suisougaku-bdcc0.firebaseapp.com",
+      projectId: "suisougaku-bdcc0",
+      storageBucket: "suisougaku-bdcc0.firebasestorage.app",
+      messagingSenderId: "636001978886",
+      appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
+      measurementId: "G-Y04PFJ9BQ6"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const auth = getAuth(app);
+
+    // --- 設定／グローバル変数 ---
+    const sessionId = "session-proto-1"; // 必要なら動的生成に変更
+    const sessionRef = ref(db, `sessions/${sessionId}`);
+
+    let uid = null;
+    let userName = null;
+    let userRole = null;
+    let isAdmin = false;
+    let startServerTime = null;
+    let serverOffset = 0; // ms: serverTime - (Date.now() + RTT/2)
+    let assets = null;
+    let audioContext = null;
+    let baseAudioBuffer = null;
+    let roleAudioBuffer = null;
+    let missAudioBuffer = null;
+    let localClicks = []; // [{t: seconds}, ...]
+    let currentSessionSnapshot = null;
+
+    // --- DOM ---
+    const joinBtn = document.getElementById('joinBtn');
+    const startBtn = document.getElementById('startBtn');
+    const adminPwInput = document.getElementById('adminPw');
+    const rolesListEl = document.getElementById('rolesList');
+    const waitingEl = document.getElementById('waiting');
+    const gameEl = document.getElementById('game');
+    const resultEl = document.getElementById('result');
+    const roleTitleEl = document.getElementById('roleTitle');
+    const laneEl = document.getElementById('lane');
+    const topBallsEl = document.getElementById('topBalls');
+    const finalAudioEl = document.getElementById('finalAudio');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const backBtn = document.getElementById('backBtn');
+
+    // --- 初期化 ---
+    (async function init(){
+      await signInAnonymously(auth);
+      uid = auth.currentUser.uid;
+      console.log('signed in uid=', uid);
+
+      joinBtn.addEventListener('click', joinFlow);
+      startBtn.addEventListener('click', onStartClicked);
+      downloadBtn.addEventListener('click', downloadResult);
+      backBtn.addEventListener('click', () => {
+        resultEl.style.display = 'none';
+        waitingEl.style.display = 'block';
+      });
+
+      // DB を監視して UI を更新
+      onValue(sessionRef, snapshot => {
+        const v = snapshot.val();
+        currentSessionSnapshot = v || {};
+        assets = currentSessionSnapshot.assets || {};
+        startServerTime = currentSessionSnapshot.startServerTime || null;
+        updateRolesView(currentSessionSnapshot);
+        // ステータス管理
+        const status = currentSessionSnapshot.status || 'waiting';
+        if (status === 'running') {
+          showGame();
+        } else if (status === 'finished' && currentSessionSnapshot.finalUrl) {
+          showResult(currentSessionSnapshot.finalUrl);
+        } else {
+          // waiting
+          waitingEl.style.display = 'block';
+          gameEl.style.display = 'none';
+          resultEl.style.display = 'none';
+        }
+      });
+
+      // server offset 推定
+      await estimateServerOffset();
+    })();
+
+    // --- UI / DB 操作 ---
+    function updateRolesView(sessionData) {
+      rolesListEl.innerHTML = '';
+      // determine roles order: rolesOrder if present, else from assets keys excluding '@' and 'miss'
+      const rolesOrder = sessionData.rolesOrder || Object.keys(sessionData.assets || {}).filter(k => k !== '@' && k !== 'miss');
+      (rolesOrder).forEach(role => {
+        const info = sessionData.assets && sessionData.assets[role];
+        const color = info?.color || '#777';
+        const el = document.createElement('div');
+        el.className = 'role';
+        el.style.background = color;
+        el.style.color = getContrastYIQ(color);
+        let text = `${role}`;
+        // add names assigned to this role
+        const names = [];
+        for (const [puid, pdata] of Object.entries(sessionData.players || {})) {
+          if (pdata.role === role) names.push(pdata.name);
+        }
+        if (names.length) text += '\n' + names.join(', ');
+        el.textContent = text;
+        rolesListEl.appendChild(el);
+      });
+
+      // 管理者判定（簡易：入力パスワードが1122なら運営とみなす）
+      isAdmin = adminPwInput.value === '1122';
+      startBtn.style.display = isAdmin ? 'inline-block' : 'none';
+    }
+
+    async function joinFlow(){
+      const name = prompt('名前を入力してください');
+      if (!name) return;
+      userName = name.trim() || '名無し';
+      // 参加者として DB に書き込む。割り振りは簡易クライアントロジック（次の空き or サイクル）
+      const snap = await get(sessionRef);
+      const session = snap.val() || {};
+      const players = session.players || {};
+      const rolesOrder = session.rolesOrder || Object.keys(session.assets || {}).filter(k => k !== '@' && k !== 'miss');
+      // assigned roles list
+      const assigned = Object.values(players).map(p => p.role);
+      let roleToAssign = null;
+      for (const r of rolesOrder) {
+        if (!assigned.includes(r)) { roleToAssign = r; break; }
+      }
+      if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
+      const playerRef = ref(db, `sessions/${sessionId}/players/${uid}`);
+      await set(playerRef, { name: userName, role: roleToAssign, joinedAt: Date.now() });
+      userRole = roleToAssign;
+      // show waiting screen
+      waitingEl.style.display = 'block';
+      gameEl.style.display = 'none';
+      resultEl.style.display = 'none';
+    }
+
+    async function onStartClicked(){
+      // 運営が start を押すと serverTimestamp を書き込む
+      // ここは簡易的にパスワード(1122)での運営チェックを行う（より厳密にしたい場合は ownerUid 管理を実装）
+      if (!isAdmin) { alert('運営パスが必要です'); return; }
+      await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
+    }
+
+    function showGame(){
+      waitingEl.style.display = 'none';
+      gameEl.style.display = 'block';
+      roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
+      if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      loadAssetsAndStart();
+      // 入力イベント
+      window.addEventListener('keydown', onKeyDown);
+      laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
+    }
+
+    function onKeyDown(e){
+      if (e.code === 'Space') {
+        e.preventDefault();
+        registerClick();
+      }
+    }
+    function onTouchStart(e){
+      registerClick();
+    }
+
+    async function loadAssetsAndStart(){
+      if (!assets || !assets['@']) {
+        console.error('@ asset missing in session assets. Put your kyoku.mp3 into session assets in Realtime DB (assets.@ = public URL).');
+        alert('ベース曲(@)がセッションに設定されていません。運営がassetsを設定してください。');
+        return;
+      }
+      // fetch base audio and role audio
+      try {
+        baseAudioBuffer = await fetchAndDecode(assets['@']);
+      } catch (e) {
+        console.error('base load error', e);
+        alert('ベース曲の読み込みに失敗しました（URL確認）');
+        return;
+      }
+      missAudioBuffer = assets['miss'] ? await fetchAndDecode(assets['miss']) : null;
+      const roleUrl = assets[userRole]?.clipUrl;
+      if (roleUrl) roleAudioBuffer = await fetchAndDecode(roleUrl);
+
+      // render notes visually based on assets[userRole].guideTimes
+      renderNotesForRole();
+    }
+
+    async function fetchAndDecode(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('fetch failed: ' + res.status);
+      const ab = await res.arrayBuffer();
+      return await audioContext.decodeAudioData(ab);
+    }
+
+    function renderNotesForRole() {
+      laneEl.querySelectorAll('.note').forEach(n => n.remove());
+      const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+      const travelMs = 3000; // ノーツが上から降ってくる所要時間（ミリ秒）
+      // get serverStart in ms (estimate if missing)
+      const nowClientMs = Date.now() + serverOffset;
+      const baseServerStartMs = startServerTime || nowClientMs;
+      times.forEach((gtime, idx) => {
+        const targetMs = baseServerStartMs + Math.round(gtime*1000);
+        const appearAt = targetMs - travelMs;
+        const div = document.createElement('div');
+        div.className = 'note';
+        div.style.background = assets[userRole]?.color || '#444';
+        div.style.color = getContrastYIQ(assets[userRole]?.color || '#444');
+        div.textContent = `note ${idx+1}`;
+        div.style.bottom = `-40px`;
+        laneEl.appendChild(div);
+
+        const animate = () => {
+          const t = Date.now() + serverOffset;
+          const pct = (t - appearAt) / travelMs;
+          if (pct >= 1) {
+            div.style.bottom = `60px`;
+            // ノーツが判定ライン到達後は数秒後に消える（通り過ぎも考慮）
+            setTimeout(()=>div.remove(), 1500);
+          } else if (pct <= 0) {
+            div.style.bottom = `-40px`;
+            requestAnimationFrame(animate);
+          } else {
+            const y = -40 + (60+40) * pct;
+            div.style.bottom = `${y}px`;
+            requestAnimationFrame(animate);
+          }
+        };
+        requestAnimationFrame(animate);
+      });
+    }
+
+    // --- クリック記録と再生（判定） ---
+    async function registerClick() {
+      if (!startServerTime) {
+        const snap = await get(sessionRef);
+        startServerTime = snap.val() && snap.val().startServerTime;
+        if (!startServerTime) {
+          alert('まだ開始されていません');
+          return;
+        }
+      }
+      const clientNow = Date.now();
+      // relativeMs: (client time + offset) - startServerTime
+      const relativeMs = (clientNow + serverOffset) - startServerTime;
+      const relativeSec = Math.max(0, relativeMs/1000);
+      playHitSound(relativeSec);
+      // store click to localClicks and DB
+      localClicks.push({t: relativeSec});
+      try {
+        const clicksRef = ref(db, `sessions/${sessionId}/clicks/${uid}`);
+        // set whole array (簡易)。将来的には push を使う方が競合少ない
+        await set(clicksRef, localClicks);
+      } catch (e) {
+        console.error('click write error', e);
+      }
+    }
+
+    function playHitSound(relativeSec) {
+      // 判定（簡易）：guideTimes と比較して perfect/miss を決定し音再生
+      const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+      let best = null, bestDiff = Infinity;
+      for (const gt of times) {
+        const d = Math.abs(gt - relativeSec);
+        if (d < bestDiff) { best = gt; bestDiff = d; }
+      }
+      const isPerfect = bestDiff <= 0.5;
+      const buffer = isPerfect ? roleAudioBuffer : (missAudioBuffer || roleAudioBuffer);
+      if (buffer && audioContext) {
+        const src = audioContext.createBufferSource();
+        src.buffer = buffer;
+        src.connect(audioContext.destination);
+        src.start();
+      }
+      showTransient(isPerfect ? 'P' : 'X');
+      // small real-time indicator to other clients: write transient to DB for 1s display (optional)
+      // For simplicity here we only show locally; real-time small balls for others require broadcasting an event in DB.
+      // However the UI spec asked for others' actions; we implement a simple broadcast below:
+      broadcastAction(isPerfect ? 'perfect' : 'miss');
+    }
+
+    async function broadcastAction(kind) {
+      const tRef = ref(db, `sessions/${sessionId}/realtimeActions/${uid}`);
+      // write a short-lived object with timestamp and kind; other clients should listen and display for ~1s
+      await set(tRef, { kind, name: userName || uid, time: serverTimestamp() });
+      // schedule removal locally after small delay (cleanup)
+      setTimeout(async () => {
+        try { await set(tRef, null); } catch(e){ /* ignore */ }
+      }, 1200);
+    }
+
+    // listen realtimeActions to show top balls for anyone's action
+    onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
+      const v = snap.val() || {};
+      topBallsEl.innerHTML = ''; // show all current ones (they auto-clear)
+      for (const [puid, data] of Object.entries(v)) {
+        if (!data) continue;
+        const b = document.createElement('div');
+        b.className = 'ball';
+        b.textContent = data.kind === 'perfect' ? 'P' : 'X';
+        topBallsEl.appendChild(b);
+      }
+    });
+
+    function showTransient(txt) {
+      const b = document.createElement('div');
+      b.className = 'ball';
+      b.textContent = txt;
+      topBallsEl.appendChild(b);
+      setTimeout(()=>b.remove(), 1000);
+    }
+
+    // --- 合成（クライアント側）と結果表示 ---
+    function showResult(url) {
+      waitingEl.style.display = 'none';
+      gameEl.style.display = 'none';
+      resultEl.style.display = 'block';
+      finalAudioEl.src = url;
+    }
+
+    async function downloadResult() {
+      try {
+        const blob = await clientMixToWav();
+        const dlUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = 'gassaku.wav';
+        a.click();
+      } catch (e) {
+        console.error(e);
+        alert('合成に失敗しました: ' + e.message);
+      }
+    }
+
+    async function clientMixToWav() {
+      if (!audioContext || !baseAudioBuffer) throw new Error('音声が準備できていません');
+      const sampleRate = 44100;
+      const duration = baseAudioBuffer.duration + 1;
+      const off = new OfflineAudioContext(2, Math.ceil(duration*sampleRate), sampleRate);
+      // base
+      const baseSrc = off.createBufferSource();
+      baseSrc.buffer = baseAudioBuffer;
+      baseSrc.connect(off.destination);
+      baseSrc.start(0);
+      // read clicks and schedule each player's clip at relative times
+      const snap = await get(sessionRef);
+      const session = snap.val() || {};
+      const allClicks = session.clicks || {};
+      for (const [puid, arr] of Object.entries(allClicks)) {
+        const role = session.players && session.players[puid] && session.players[puid].role;
+        const clipUrl = session.assets && session.assets[role] && session.assets[role].clipUrl;
+        if (!clipUrl) continue;
+        // fetch clip buffer using off.decodeAudioData
+        const res = await fetch(clipUrl);
+        if (!res.ok) continue;
+        const ab = await res.arrayBuffer();
+        const clipBuf = await off.decodeAudioData(ab);
+        for (const c of arr) {
+          const t = c.t;
+          const s = off.createBufferSource();
+          s.buffer = clipBuf;
+          s.connect(off.destination);
+          s.start(t);
+        }
+      }
+      const rendered = await off.startRendering();
+      const wavBuf = audioBufferToWav(rendered);
+      return new Blob([wavBuf], {type: 'audio/wav'});
+    }
+
+    // --- ユーティリティ: AudioBuffer -> WAV (same asプロトタイプ) ---
+    function audioBufferToWav(buffer, opt) {
+      opt = opt || {}
+      var numChannels = buffer.numberOfChannels
+      var sampleRate = buffer.sampleRate
+      var format = opt.float32 ? 3 : 1
+      var bitDepth = format === 3 ? 32 : 16
+
+      var result
+      if (numChannels === 2) {
+        result = interleave(buffer.getChannelData(0), buffer.getChannelData(1))
+      } else {
+        result = buffer.getChannelData(0)
+      }
+
+      return encodeWAV(result, format, sampleRate, numChannels, bitDepth)
+    }
+
+    function interleave(inputL, inputR){
+      var length = inputL.length + inputR.length
+      var result = new Float32Array(length)
+      var index = 0
+      var inputIndex = 0
+      while (index < length){
+        result[index++] = inputL[inputIndex]
+        result[index++] = inputR[inputIndex]
+        inputIndex++
+      }
+      return result
+    }
+
+    function encodeWAV(samples, format, sampleRate, numChannels, bitDepth){
+      var bytesPerSample = bitDepth / 8
+      var blockAlign = numChannels * bytesPerSample
+      var buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
+      var view = new DataView(buffer)
+      writeString(view, 0, 'RIFF')
+      view.setUint32(4, 36 + samples.length * bytesPerSample, true)
+      writeString(view, 8, 'WAVE')
+      writeString(view, 12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, format === 3 ? 3 : 1, true)
+      view.setUint16(22, numChannels, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * blockAlign, true)
+      view.setUint16(32, blockAlign, true)
+      view.setUint16(34, bitDepth, true)
+      writeString(view, 36, 'data')
+      view.setUint32(40, samples.length * bytesPerSample, true)
+      if (format === 1) {
+        floatTo16BitPCM(view, 44, samples)
+      } else {
+        writeFloat32(view, 44, samples)
+      }
+      return buffer
+    }
+
+    function floatTo16BitPCM(output, offset, input){
+      for (var i = 0; i < input.length; i++, offset += 2){
+        var s = Math.max(-1, Math.min(1, input[i]))
+        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+      }
+    }
+
+    function writeFloat32(output, offset, input){
+      for (var i = 0; i < input.length; i++, offset += 4){
+        output.setFloat32(offset, input[i], true)
+      }
+    }
+
+    function writeString(view, offset, string){
+      for (var i = 0; i < string.length; i++){
+        view.setUint8(offset + i, string.charCodeAt(i))
+      }
+    }
+
+    // --- server time offset 推定（複数 ping の中央値） ---
+    async function estimateServerOffset() {
+      const rand = Math.random().toString(36).slice(2, 8);
+      const pings = [];
+      for (let i=0;i<6;i++){
+        const t0 = Date.now();
+        const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
+        await set(tempRef, {ts: serverTimestamp()});
+        const snap = await get(tempRef);
+        const serverTs = snap.val() && snap.val().ts;
+        const t1 = Date.now();
+        if (serverTs) {
+          const rtt = t1 - t0;
+          const offset = serverTs - (t0 + rtt/2);
+          pings.push(offset);
+        }
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (pings.length) {
+        pings.sort((a,b)=>a-b);
+        serverOffset = pings[Math.floor(pings.length/2)];
+        console.log('serverOffset', serverOffset);
+      } else {
+        serverOffset = 0;
+      }
+    }
+
+    // --- 補助関数 ---
+    function getContrastYIQ(hexcolor){
+      // hexcolor like "#RRGGBB" or color string fallback
+      try {
+        if (!hexcolor.startsWith('#')) return '#fff';
+        const r = parseInt(hexcolor.substr(1,2),16);
+        const g = parseInt(hexcolor.substr(3,2),16);
+        const b = parseInt(hexcolor.substr(5,2),16);
+        const yiq = ((r*299)+(g*587)+(b*114))/1000;
+        return (yiq >= 128) ? '#000' : '#fff';
+      } catch(e){ return '#fff'; }
+    }
+
+    // --- リアルタイム: 他クライアントのアクションを1秒表示するロジック（DB側のrealtimeActionsを監視） ---
+    // この部分は onValue(session/realtimeActions) で実装済み（上）
+
+    // --- 注意・運用メモ（簡潔） ---
+    // - 事前に Realtime Database の sessions/<sessionId>/assets に以下のように設定しておくこと:
+    //   assets:
+    //     @: "https://.../kyoku.mp3"   <-- ベース曲（必須）
+    //     miss: "https://.../miss.mp3"
+    //     A: { clipUrl: "https://.../A_note.mp3", color: "#FF6666", guideTimes: [180.23, 162.42] }
+    //     B: { ... }
+    // - また sessions/<sessionId>/rolesOrder を入れておくと割り当て順を制御できます。
+    // - Storage にアップした音源は公開URLで指定するか、署名付きURLを使ってください。
+    // - セキュリティルール：本コードはデモ段階なので、本番では write 制限（players は auth.uid のみ、startServerTime は運営のみ等）を強く推奨します。
+    // - 合成（MP3出力）をサーバ化する場合は Cloud Run + ffmpeg を使うと安定します（本ファイルはクライアント合成（WAV出力）に対応）。
+  </script>
+</body>
+</html>
