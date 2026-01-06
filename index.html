@@ -3,23 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>合作音ゲー（統合版 + コード内編集可）</title>
+  <title>合作音ゲー（統合版・編集可能）</title>
   <style>
     body{font-family: system-ui, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
     #top{padding:12px; display:flex; gap:8px; align-items:center; background:#fff; border-bottom:1px solid #ddd}
+    #statusBar{margin-left:12px; font-size:14px; color:#333}
     #waiting,#game,#result{display:none; padding:12px}
     .role { padding:6px; border-radius:6px; margin:4px; display:inline-block; min-width:120px; white-space:pre-line}
-    #lane{position:relative; height:300px; background:#111; color:white; overflow:hidden; border-radius:8px}
-    .note{ position:absolute; left:50%; transform:translateX(-50%); width:80%; height:30px; border-radius:6px; text-align:center; line-height:30px; font-size:14px; opacity:0.95}
+    #lane{position:relative; height:60vh; background:#000; color:white; overflow:hidden; border-radius:8px}
+    .note{ position:absolute; left:50%; transform:translateX(-50%); width:80%; height:18px; border-radius:6px; text-align:center; line-height:18px; font-size:14px; opacity:0.95}
+    #judgeLine{position:absolute; bottom:60px; left:0; right:0; height:8px; background:rgba(255,255,255,0.9); z-index:5}
     #topBalls{display:flex; gap:6px; margin-top:6px; flex-wrap:wrap}
-    .ball{width:34px; height:34px; border-radius:50%; background:#999; display:flex; align-items:center; justify-content:center; color:white; font-size:12px}
+    .ball{width:34px; height:34px; border-radius:50%; background:#666; display:flex; align-items:center; justify-content:center; color:white; font-size:12px}
     #controls{position:fixed; right:12px; bottom:12px; z-index:999}
     #rolesList{display:flex; flex-wrap:wrap; gap:8px}
     #roleTitle{margin-bottom:8px}
     button{cursor:pointer}
     .small{font-size:12px; color:#666}
     input[type="text"]{padding:6px}
-    pre.config { background:#222; color:#fff; padding:10px; border-radius:6px; overflow:auto; max-height:220px; }
+    #transientText{position:absolute; left:50%; transform:translateX(-50%); bottom:90px; font-size:24px; font-weight:700; color:#fff; text-shadow:0 0 6px #000; pointer-events:none; opacity:0; transition:opacity 0.15s linear}
+    #userInfo{font-size:13px; color:#333; margin-left:12px}
+    #adminReset{margin-left:8px}
   </style>
 </head>
 <body>
@@ -28,6 +32,8 @@
     <div style="margin-left:auto; display:flex; align-items:center; gap:8px">
       <div class="small">運営パス</div>
       <input id="adminPw" placeholder="1122" style="width:110px; padding:6px"/>
+      <div id="userInfo">未参加</div>
+      <div id="statusBar">状態: <span id="stateText">--</span></div>
     </div>
   </div>
 
@@ -37,22 +43,17 @@
     <div id="topBalls"></div>
     <div id="controls">
       <button id="startBtn" style="display:none">開始（運営のみ）</button>
+      <button id="adminReset" style="display:none">強制終了（運営）</button>
     </div>
-    <h4>コード内で編集できるセクション（サンプル表示）</h4>
-    <p class="small">
-      下の JSON はこのファイル内の CONFIG.assets に相当する「いつでも追加できるコード」の雛形です。
-      実行時は CONFIG を書き換えて保存（＝直接コードに打ち込む）してください。
-      （Firebase の assets と競合しないよう、CONFIG.overrideAssets=true にするとこちらが優先されます）
-    </p>
-    <pre class="config" id="configPreview"></pre>
   </div>
 
   <div id="game">
     <h3 id="roleTitle"></h3>
     <div id="lane">
-      <div id="judgeLine" style="position:absolute; bottom:60px; left:0; right:0; height:4px; background:rgba(255,255,255,0.5)"></div>
+      <div id="judgeLine"></div>
+      <div id="transientText"></div>
     </div>
-    <p>スペースキー／タップで判定（perfect: ±0.5s）</p>
+    <p>スペースキー／タップで判定（PERFECT: ±0.5s）</p>
   </div>
 
   <div id="result">
@@ -66,677 +67,762 @@
 
   <script type="module">
 /*
-  このファイルは統合版コードに「コード内で編集できる資産定義（@、A〜など）」を追加したものです。
-
-  使い方（簡単）
-  1) 下の CONFIG セクションを直接このファイルに書き換えます（つまり「打ち込む」）。
-     - CONFIG.overrideAssets を true にすれば、Realtime DB の assets よりこちらが優先されます。
-     - guideTimes は hh:mm:ss(.ms) / mm:ss(.ms) / ss(.ms) / 数字（秒）を受け付けます。文字列形式もパースします。
-  2) Firebase の設定や Realtime Database、Storage、Auth（匿名ログイン）の有効化は必要です。
-     エラーが出る場合は下のエラー説明を参照してください。
-
-  「いつでも追加できるコード」仕様（このコメントをそのままコード内に残しています）：
-    ・@（一つ）: ベース曲のURL(mp3)。時間（再生時間）が重要。
-    ・A,B,...: 各アルファベット設定:
-      - clipUrl: mp3 のURL（このアルファベットが演奏する“一音”）
-      - color: レーン表示用カラー
-      - guideTimes: ['3:00.23','2:42.32', 10.5] のように指定（@ の再生時間に対する秒）
-    ・miss: ミス時の音
-    ※ パーフェクト判定: 押した時刻と guideTime の差が <= 0.5s
+  使い方（重要）
+  - このファイル内部の CONFIG セクションを「直接書き換えて」曲や各アルファベットの設定を編集してください。
+  - CONFIG.overrideAssets = true にすると、Realtime DB の assets を無視して CONFIG の内容を使います（開発時に便利）。
+  - Realtime Database と Storage、Authentication（匿名）を Firebase Console で有効化してください。
+  - データの初期化（assets, rolesOrder）は CONFIG によって上書きされますが、運営の「強制終了」は DB 内の players/clicks/realtimeActions/startServerTime/finalUrl を消します。
 */
 
-    // ------------------ CONFIG（ここを直接編集してください） ------------------
-    const CONFIG = {
-      // overrideAssets = true にすると、Realtime DB の assets を無視してこのCONFIGの内容を使います。
-      overrideAssets: true,
-
-      // assets の書き方（サンプル）
-      // - 直接 https の公開 URL を使うか、gs://bucket/path の形式でもOK（後者は Storage の getDownloadURL を使って解決します）
-      // - guideTimes は文字列または数値の配列で指定可能
-      assets: {
-        "@": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/kyoku.mp3", // ← ここを実際のベース曲URLに書き換えてください
-        "miss": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/miss.mp3",
-        // サンプル: A の設定
-        "A": {
-          clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/A.mp3",
-          color: "#FF6666",
-          guideTimes: ["0:18.00", "0:25.56", "0:38.12","0:54.94","0:57.80"] // mm:ss.ms  等の文字列や秒数の数値が使えます
-        },
-        "B": {
-          clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/B.mp3",
-          color: "#66CCFF",
-          guideTimes: ["0:27.50", "0:28.21","0:28.83","0:29.60","0:30.32","0:31.01","0:31.78","0:32.48","0:33.15","0:33.15","0:34.66","0:35.38","0:36.02","0:36.75","0:42.09","0:44.09","0:54.96","0:57.77"]
-        }
-        // 以降 C,D... を必要に応じて追加
+  // ------------------ CONFIG（ここを直接編集してください） ------------------
+  const CONFIG = {
+    overrideAssets: true,
+    assets: {
+      "@": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/kyoku.mp3",
+      "miss": "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/miss.mp3",
+      "A": {
+        clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/A.mp3",
+        color: "#FF6666",
+        guideTimes: ["0:18.00", "0:25.56", "0:38.12","0:54.94","0:57.80"]
       },
-
-      // rolesOrder を指定すると割り当て順を制御できます（A,B,C,...）
-      rolesOrder: ["A","B","C","D","E","F","G","H","I"]
-    };
-    // ---------------------------------------------------------------------------
-
-    // --- Firebase 初期化 ---
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-    import { getDatabase, ref, onValue, set, update, get, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
-    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
-    import { getStorage, ref as storageRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
-
-    // --- IMPORTANT ---
-    // 以下の firebaseConfig を必要に応じて書き換えてください（特に databaseURL と storageBucket が重要）。
-    // ログに "configuration-not-found" が出る場合は Firebase Console で Authentication -> Sign-in method -> Anonymous を有効化してください。
-    const firebaseConfig = {
-      apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
-      authDomain: "suisougaku-bdcc0.firebaseapp.com",
-      projectId: "suisougaku-bdcc0",
-      // ← Realtime Database を使用する場合は databaseURL を必ず入れてください（下は警告ログに出ていた値）
-      databaseURL: "https://suisougaku-bdcc0-default-rtdb.firebaseio.com/",
-      // storageBucket は通常 "<project-id>.appspot.com" です。もし異なる場合はコンソールで確認して書き換えてください。
-      storageBucket: "suisougaku-bdcc0.appspot.com",
-      messagingSenderId: "636001978886",
-      appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
-      measurementId: "G-Y04PFJ9BQ6"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
-    const auth = getAuth(app);
-    const storage = getStorage(app);
-
-    // --- 設定／グローバル変数 ---
-    const sessionId = "session-proto-1"; // 必要なら動的生成に変更
-    const sessionRef = ref(db, `sessions/${sessionId}`);
-
-    let uid = null;
-    let userName = null;
-    let userRole = null;
-    let isAdmin = false;
-    let startServerTime = null;
-    let serverOffset = 0; // ms: serverTime - (Date.now() + RTT/2)
-    let assets = null;
-    let audioContext = null;
-    let baseAudioBuffer = null;
-    let roleAudioBuffer = null;
-    let missAudioBuffer = null;
-    let localClicks = []; // [{t: seconds}, ...]
-    let currentSessionSnapshot = null;
-
-    // --- DOM ---
-    const joinBtn = document.getElementById('joinBtn');
-    const startBtn = document.getElementById('startBtn');
-    const adminPwInput = document.getElementById('adminPw');
-    const rolesListEl = document.getElementById('rolesList');
-    const waitingEl = document.getElementById('waiting');
-    const gameEl = document.getElementById('game');
-    const resultEl = document.getElementById('result');
-    const roleTitleEl = document.getElementById('roleTitle');
-    const laneEl = document.getElementById('lane');
-    const topBallsEl = document.getElementById('topBalls');
-    const finalAudioEl = document.getElementById('finalAudio');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const backBtn = document.getElementById('backBtn');
-    const configPreview = document.getElementById('configPreview');
-
-    // show CONFIG preview so you know what to edit in-file
-    configPreview.textContent = JSON.stringify(CONFIG, null, 2);
-
-    // --- init ---
-    (async function init(){
-      try {
-        await signInAnonymously(auth);
-        uid = auth.currentUser.uid;
-        console.log('signed in uid=', uid);
-      } catch (err) {
-        // よくあるエラーの説明をわかりやすく出す（後述する分析と対策参照）
-        console.error(err);
-        alert('Firebase Anonymous Sign-in に失敗しました。\n' +
-              '原因の多くは：Firebase Console で「Authentication → Sign-in method → Anonymous」を有効化していないこと、\n' +
-              'または firebaseConfig に databaseURL / storageBucket が正しく設定されていないことです。\n\n' +
-              '詳細コンソールログを確認してください。');
+      "B": {
+        clipUrl: "https://raw.githubusercontent.com/kikiyume280/zz-suisougaku-/main/B.mp3",
+        color: "#66CCFF",
+        guideTimes: ["0:27.50", "0:28.21","0:28.83","0:29.60","0:30.32","0:31.01","0:31.78","0:32.48","0:33.15","0:33.15","0:34.66","0:35.38","0:36.02","0:36.75","0:42.09","0:44.09","0:54.96","0:57.77"]
       }
+    },
+    rolesOrder: ["A","B","C","D","E","F","G","H","I"]
+  };
+  // ---------------------------------------------------------------------------
 
-      joinBtn.addEventListener('click', joinFlow);
-      startBtn.addEventListener('click', onStartClicked);
-      downloadBtn.addEventListener('click', downloadResult);
-      backBtn.addEventListener('click', () => {
-        resultEl.style.display = 'none';
-        waitingEl.style.display = 'block';
-      });
+  // --- Firebase 初期化 ---
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, get, serverTimestamp, remove } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+  import { getStorage, ref as storageRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
 
-      // DB を監視して UI を更新
-      onValue(sessionRef, snapshot => {
-        const v = snapshot.val();
-        currentSessionSnapshot = v || {};
-        // Use CONFIG assets when overrideAssets is true OR when DB has no assets
-        if (CONFIG.overrideAssets || !(currentSessionSnapshot.assets && Object.keys(currentSessionSnapshot.assets).length)) {
-          // normalize guideTimes to seconds
-          assets = normalizeConfigAssets(CONFIG.assets || {});
-        } else {
-          assets = normalizeConfigAssets(currentSessionSnapshot.assets || {});
-        }
-        startServerTime = currentSessionSnapshot.startServerTime || null;
-        updateRolesView(currentSessionSnapshot);
-        const status = currentSessionSnapshot.status || 'waiting';
-        if (status === 'running') {
-          showGame();
-        } else if (status === 'finished' && currentSessionSnapshot.finalUrl) {
-          showResult(currentSessionSnapshot.finalUrl);
-        } else {
-          waitingEl.style.display = 'block';
-          gameEl.style.display = 'none';
-          resultEl.style.display = 'none';
-        }
-      });
+  // 必要に応じて databaseURL / storageBucket を正確にセットしてください（なければ警告が出ます）
+  const firebaseConfig = {
+    apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
+    authDomain: "suisougaku-bdcc0.firebaseapp.com",
+    projectId: "suisougaku-bdcc0",
+    databaseURL: "https://suisougaku-bdcc0-default-rtdb.firebaseio.com/",
+    storageBucket: "suisougaku-bdcc0.appspot.com",
+    messagingSenderId: "636001978886",
+    appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
+    measurementId: "G-Y04PFJ9BQ6"
+  };
 
-      // server offset 推定
-      await estimateServerOffset();
-    })();
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const auth = getAuth(app);
+  const storage = getStorage(app);
 
-    // ------------------ UTIL: asset normalizer & time parser ------------------
-    function normalizeConfigAssets(rawAssets) {
-      const out = {};
-      for (const k of Object.keys(rawAssets || {})) {
-        if (k === '@' || k === 'miss') {
-          out[k] = rawAssets[k];
-          continue;
-        }
-        const v = rawAssets[k] || {};
-        out[k] = {
-          clipUrl: v.clipUrl || v.url || null,
-          color: v.color || '#777',
-          guideTimes: (v.guideTimes || []).map(parseTimeToSeconds)
-        };
-      }
-      // ensure @ and miss keys pass-through raw values
-      if (rawAssets['@']) out['@'] = rawAssets['@'];
-      if (rawAssets['miss']) out['miss'] = rawAssets['miss'];
-      return out;
+  // --- グローバル ---
+  const sessionId = "session-proto-1";
+  const sessionRef = ref(db, `sessions/${sessionId}`);
+
+  let uid = null;
+  let userName = null;
+  let userRole = null;
+  let isAdmin = false;
+  let startServerTime = null;
+  let serverOffset = 0;
+  let assets = null;
+  let audioContext = null;
+  let baseAudioBuffer = null;
+  let roleAudioBuffer = null;
+  let missAudioBuffer = null;
+  let localClicks = []; // [{t: seconds}, ...]
+  let currentSessionSnapshot = null;
+  let baseSourceNode = null;
+
+  // --- DOM ---
+  const joinBtn = document.getElementById('joinBtn');
+  const startBtn = document.getElementById('startBtn');
+  const adminPwInput = document.getElementById('adminPw');
+  const adminResetBtn = document.getElementById('adminReset');
+  const rolesListEl = document.getElementById('rolesList');
+  const waitingEl = document.getElementById('waiting');
+  const gameEl = document.getElementById('game');
+  const resultEl = document.getElementById('result');
+  const roleTitleEl = document.getElementById('roleTitle');
+  const laneEl = document.getElementById('lane');
+  const topBallsEl = document.getElementById('topBalls');
+  const finalAudioEl = document.getElementById('finalAudio');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const backBtn = document.getElementById('backBtn');
+  const transientTextEl = document.getElementById('transientText');
+  const userInfoEl = document.getElementById('userInfo');
+  const stateTextEl = document.getElementById('stateText');
+
+  // --- 初期化 ---
+  (async function init(){
+    try {
+      await signInAnonymously(auth);
+      uid = auth.currentUser.uid;
+      console.log('signed in uid=', uid);
+      userInfoEl.textContent = '未参加';
+    } catch (err) {
+      console.error(err);
+      alert('Firebase の匿名ログインに失敗しました。Console で Anonymous を有効にしてください。\n' + err.message);
     }
 
-    // parse many common formats:
-    // - number -> seconds
-    // - "mm:ss.mm", "m:ss", "hh:mm:ss.ms", "mm:ss:ms" etc.
-    function parseTimeToSeconds(val) {
-      if (val === null || val === undefined) return 0;
-      if (typeof val === 'number') return val;
-      const s = String(val).trim();
-      if (!s) return 0;
-      // if contains '.' and no ':' -> float seconds
-      if (s.indexOf(':') === -1) {
-        const f = parseFloat(s);
-        return isFinite(f) ? f : 0;
-      }
-      // split by colon
-      const parts = s.split(':').map(p => p.trim());
-      // support 3 parts => hh:mm:ss(.ms)
-      // 2 parts => mm:ss(.ms)
-      // 1 part handled above
-      let seconds = 0;
-      if (parts.length === 3) {
-        const h = parseInt(parts[0]) || 0;
-        const m = parseInt(parts[1]) || 0;
-        const sec = parseFloat(parts[2].replace(',', '.')) || 0;
-        seconds = h*3600 + m*60 + sec;
-      } else if (parts.length === 2) {
-        const m = parseInt(parts[0]) || 0;
-        const sec = parseFloat(parts[1].replace(',', '.')) || 0;
-        seconds = m*60 + sec;
+    joinBtn.addEventListener('click', joinFlow);
+    startBtn.addEventListener('click', onStartClicked);
+    adminResetBtn.addEventListener('click', onAdminReset);
+    downloadBtn.addEventListener('click', downloadResult);
+    backBtn.addEventListener('click', () => { resultEl.style.display = 'none'; waitingEl.style.display = 'block'; });
+
+    // Realtime DB の監視
+    onValue(sessionRef, snapshot => {
+      const v = snapshot.val();
+      currentSessionSnapshot = v || {};
+      // choose assets: CONFIG override if configured or DB empty
+      if (CONFIG.overrideAssets || !(currentSessionSnapshot.assets && Object.keys(currentSessionSnapshot.assets).length)) {
+        assets = normalizeConfigAssets(CONFIG.assets || {});
       } else {
-        seconds = parseFloat(parts[0].replace(',', '.')) || 0;
+        assets = normalizeConfigAssets(currentSessionSnapshot.assets || {});
       }
-      return seconds;
+      startServerTime = currentSessionSnapshot.startServerTime || null;
+      updateStateUI(currentSessionSnapshot.status || 'waiting');
+      updateRolesView(currentSessionSnapshot);
+      // hide join button while running
+      const status = currentSessionSnapshot.status || 'waiting';
+      joinBtn.style.display = status === 'running' ? 'none' : 'inline-block';
+
+      // if running and our audio isn't loaded / scheduled, ensure we schedule base audio
+      if (status === 'running') {
+        // if user has joined, show game if not already
+        if (userRole) showGame();
+      } else if (status === 'finished' && currentSessionSnapshot.finalUrl) {
+        showResult(currentSessionSnapshot.finalUrl);
+      } else {
+        // waiting
+        waitingEl.style.display = 'block';
+        gameEl.style.display = 'none';
+        resultEl.style.display = 'none';
+      }
+    });
+
+    await estimateServerOffset();
+    window.addEventListener('resize', adjustLaneHeight);
+    adjustLaneHeight();
+  })();
+
+  // ------------------ Helpers / CONFIG normalization ------------------
+  function normalizeConfigAssets(rawAssets) {
+    const out = {};
+    for (const k of Object.keys(rawAssets || {})) {
+      if (k === '@' || k === 'miss') {
+        out[k] = rawAssets[k];
+        continue;
+      }
+      const v = rawAssets[k] || {};
+      out[k] = {
+        clipUrl: v.clipUrl || v.url || null,
+        color: v.color || '#777',
+        guideTimes: (v.guideTimes || []).map(parseTimeToSeconds)
+      };
     }
+    if (rawAssets['@']) out['@'] = rawAssets['@'];
+    if (rawAssets['miss']) out['miss'] = rawAssets['miss'];
+    return out;
+  }
 
-    // --- UI / DB 操作 ---
-    function updateRolesView(sessionData) {
-      rolesListEl.innerHTML = '';
-      const rolesOrder = sessionData.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-      (rolesOrder).forEach(role => {
-        const info = assets && assets[role];
-        const color = info?.color || '#777';
-        const el = document.createElement('div');
-        el.className = 'role';
-        el.style.background = color;
-        el.style.color = getContrastYIQ(color);
-        let text = `${role}`;
-        // add names assigned to this role
-        const names = [];
-        for (const [puid, pdata] of Object.entries(sessionData.players || {})) {
-          if (pdata.role === role) names.push(pdata.name);
-        }
-        if (names.length) text += '\n' + names.join(', ');
-        el.textContent = text;
-        rolesListEl.appendChild(el);
-      });
-
-      // 管理者判定（簡易：入力パスワードが1122なら運営とみなす）
-      isAdmin = adminPwInput.value === '1122';
-      startBtn.style.display = isAdmin ? 'inline-block' : 'none';
+  function parseTimeToSeconds(val) {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return val;
+    const s = String(val).trim();
+    if (!s) return 0;
+    if (s.indexOf(':') === -1) {
+      const f = parseFloat(s);
+      return isFinite(f) ? f : 0;
     }
+    const parts = s.split(':').map(p => p.trim());
+    let seconds = 0;
+    if (parts.length === 3) {
+      const h = parseInt(parts[0]) || 0;
+      const m = parseInt(parts[1]) || 0;
+      const sec = parseFloat(parts[2].replace(',', '.')) || 0;
+      seconds = h*3600 + m*60 + sec;
+    } else if (parts.length === 2) {
+      const m = parseInt(parts[0]) || 0;
+      const sec = parseFloat(parts[1].replace(',', '.')) || 0;
+      seconds = m*60 + sec;
+    } else {
+      seconds = parseFloat(parts[0].replace(',', '.')) || 0;
+    }
+    return seconds;
+  }
 
-    async function joinFlow(){
-      const name = prompt('名前を入力してください');
-      if (!name) return;
-      userName = name.trim() || '名無し';
+  // ------------------ UI / DB 操作 ------------------
+  function updateStateUI(status) {
+    // status: waiting | running | collecting | compiling | finished
+    const map = {
+      waiting: '待機中',
+      running: '演奏中',
+      collecting: '集計中',
+      compiling: '合成中',
+      finished: '完成'
+    };
+    stateTextEl.textContent = map[status] || status;
+    // admin reset visibility
+    isAdmin = adminPwInput.value === '1122';
+    adminResetBtn.style.display = isAdmin ? 'inline-block' : 'none';
+  }
+
+  function updateRolesView(sessionData) {
+    rolesListEl.innerHTML = '';
+    const rolesOrder = sessionData.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+    (rolesOrder).forEach(role => {
+      const info = assets && assets[role];
+      const color = info?.color || '#777';
+      const el = document.createElement('div');
+      el.className = 'role';
+      el.style.background = color;
+      el.style.color = getContrastYIQ(color);
+      let text = `${role}`;
+      const names = [];
+      for (const [puid, pdata] of Object.entries(sessionData.players || {})) {
+        if (pdata.role === role) names.push(pdata.name);
+      }
+      if (names.length) text += '\n' + names.join(', ');
+      el.textContent = text;
+      rolesListEl.appendChild(el);
+    });
+
+    // update userInfo
+    if (currentSessionSnapshot.players && currentSessionSnapshot.players[uid]) {
+      userInfoEl.textContent = `あなた: ${currentSessionSnapshot.players[uid].name} (${currentSessionSnapshot.players[uid].role})`;
+    } else {
+      userInfoEl.textContent = '未参加';
+    }
+  }
+
+  async function joinFlow(){
+    const name = prompt('名前を入力してください');
+    if (!name) return;
+    userName = name.trim() || '名無し';
+    const snap = await get(sessionRef);
+    const session = snap.val() || {};
+    const players = session.players || {};
+    const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+    const assigned = Object.values(players).map(p => p.role);
+    let roleToAssign = null;
+    for (const r of rolesOrder) {
+      if (!assigned.includes(r)) { roleToAssign = r; break; }
+    }
+    if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
+    await set(ref(db, `sessions/${sessionId}/players/${uid}`), { name: userName, role: roleToAssign, joinedAt: Date.now() });
+    userRole = roleToAssign;
+    userInfoEl.textContent = `あなた: ${userName} (${userRole})`;
+    waitingEl.style.display = 'block';
+  }
+
+  async function onStartClicked(){
+    if (!isAdmin) { alert('運営パスが必要です'); return; }
+    // set running + serverTimestamp
+    try {
+      // Before set running, create auto clicks for empty roles so that they are recorded
       const snap = await get(sessionRef);
       const session = snap.val() || {};
       const players = session.players || {};
       const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
-      const assigned = Object.values(players).map(p => p.role);
-      let roleToAssign = null;
+
+      // write status running with serverTimestamp first so client scheduling can read startServerTime
+      await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
+
+      // create auto clicks entries for empty roles: use uids "__auto_<role>"
       for (const r of rolesOrder) {
-        if (!assigned.includes(r)) { roleToAssign = r; break; }
-      }
-      if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
-      const playerRef = ref(db, `sessions/${sessionId}/players/${uid}`);
-      await set(playerRef, { name: userName, role: roleToAssign, joinedAt: Date.now() });
-      userRole = roleToAssign;
-      waitingEl.style.display = 'block';
-      gameEl.style.display = 'none';
-      resultEl.style.display = 'none';
-    }
-
-    async function onStartClicked(){
-      if (!isAdmin) { alert('運営パスが必要です'); return; }
-      try {
-        await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
-      } catch (e) {
-        console.error('start failed', e);
-        alert('開始に失敗しました。Firebase の書き込み権限や network を確認してください。');
-      }
-    }
-
-    function showGame(){
-      waitingEl.style.display = 'none';
-      gameEl.style.display = 'block';
-      roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
-      if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      loadAssetsAndStart();
-      window.addEventListener('keydown', onKeyDown);
-      laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
-    }
-
-    function onKeyDown(e){
-      if (e.code === 'Space') {
-        e.preventDefault();
-        registerClick();
-      }
-    }
-    function onTouchStart(e){
-      registerClick();
-    }
-
-    async function loadAssetsAndStart(){
-      // assets['@'] が URL（string）か、CONFIG 形式の値であることを前提
-      if (!assets || !assets['@']) {
-        console.error('@ asset missing in assets. Put your kyoku.mp3 into CONFIG.assets or sessions/<sessionId>/assets in Realtime DB (assets.@ = public URL).');
-        alert('ベース曲(@)が設定されていません。CONFIG.assets または Realtime DB に設定してください。');
-        return;
-      }
-      try {
-        baseAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(assets['@']));
-      } catch (e) {
-        console.error('base load error', e);
-        alert('ベース曲の読み込みに失敗しました（URL確認）');
-        return;
-      }
-      if (assets['miss']) {
-        try { missAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(assets['miss'])); } catch(e){ console.warn('miss load failed', e); }
-      }
-      const roleUrl = assets[userRole] && assets[userRole].clipUrl;
-      if (roleUrl) {
-        try { roleAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(roleUrl)); } catch(e){ console.warn('role clip load failed', e); }
-      }
-      renderNotesForRole();
-    }
-
-    async function resolveUrlIfGs(urlOrObj) {
-      // urlOrObj could be a string or object; return a https URL
-      if (!urlOrObj) return null;
-      if (typeof urlOrObj === 'object') {
-        // object with clipUrl or raw string in "url"
-        if (urlOrObj.clipUrl) return resolveUrlIfGs(urlOrObj.clipUrl);
-        if (urlOrObj.url) return resolveUrlIfGs(urlOrObj.url);
-      }
-      const url = String(urlOrObj);
-      if (url.startsWith('gs://')) {
-        try {
-          // convert gs://bucket/path to storage ref and getDownloadURL
-          // gs://bucket/path -> path after bucket
-          const match = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
-          if (!match) throw new Error('gs:// URL parsing failed');
-          const path = match[2];
-          const sref = storageRef(storage, path);
-          const durl = await getDownloadURL(sref);
-          return durl;
-        } catch (e) {
-          console.error('getDownloadURL failed for', url, e);
-          throw e;
+        const assignedNames = Object.values(players).filter(p => p.role === r);
+        if (!assignedNames.length) {
+          // write synthetic clicks under special uid so they participate in final mix
+          const guideTimes = (assets[r] && assets[r].guideTimes) || [];
+          const autoUid = `__auto_${r}`;
+          const autoClicks = guideTimes.map(t => ({ t }));
+          try {
+            await set(ref(db, `sessions/${sessionId}/clicks/${autoUid}`), autoClicks);
+          } catch(e) {
+            console.warn('auto click write failed', e);
+          }
         }
       }
-      // if already https, return as-is
-      return url;
+    } catch (e) {
+      console.error('start failed', e);
+      alert('開始に失敗しました。Console を確認してください。');
+    }
+  }
+
+  async function onAdminReset(){
+    if (!confirm('本当に強制終了してセッションデータ（参加者・記録等）を初期化しますか？（assetsは維持されます）')) return;
+    try {
+      // keep assets & rolesOrder, reset others
+      const keepAssets = assets || {};
+      const payload = { status: 'waiting', assets: currentSessionSnapshot.assets || CONFIG.assets || keepAssets, rolesOrder: currentSessionSnapshot.rolesOrder || CONFIG.rolesOrder || CONFIG.rolesOrder };
+      await set(sessionRef, payload);
+      // remove clicks, players, realtimeActions, startServerTime, finalUrl
+      await set(ref(db, `sessions/${sessionId}/players`), null);
+      await set(ref(db, `sessions/${sessionId}/clicks`), null);
+      await set(ref(db, `sessions/${sessionId}/realtimeActions`), null);
+      await set(ref(db, `sessions/${sessionId}/startServerTime`), null);
+      await set(ref(db, `sessions/${sessionId}/finalUrl`), null);
+      alert('強制終了しました。参加者データと記録を削除しました。');
+    } catch(e) {
+      console.error('reset failed', e);
+      alert('強制終了に失敗しました。Console を確認してください。');
+    }
+  }
+
+  function showGame(){
+    waitingEl.style.display = 'none';
+    gameEl.style.display = 'block';
+    resultEl.style.display = 'none';
+    roleTitleEl.textContent = `あなたの役割: ${userRole || '未割当'}`;
+    if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    loadAssetsAndStart();
+    window.addEventListener('keydown', onKeyDown);
+    laneEl.addEventListener('touchstart', onTouchStart, {passive:true});
+  }
+
+  function onKeyDown(e){
+    if (e.code === 'Space') {
+      e.preventDefault();
+      registerClick();
+    }
+  }
+  function onTouchStart(e){
+    registerClick();
+  }
+
+  async function loadAssetsAndStart(){
+    if (!assets || !assets['@']) {
+      console.error('@ asset missing', assets);
+      alert('ベース曲(@)が設定されていません（CONFIG または DB を確認してください）。');
+      return;
+    }
+    try {
+      const baseUrl = await resolveUrlIfGs(assets['@']);
+      baseAudioBuffer = await fetchAndDecode(baseUrl);
+    } catch (e) {
+      console.error('base load error', e);
+      alert('ベース曲の読み込みに失敗しました（URL確認）');
+      return;
+    }
+    if (assets['miss']) {
+      try { missAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(assets['miss'])); } catch(e){ console.warn('miss load failed', e); }
+    }
+    const roleUrl = assets[userRole] && assets[userRole].clipUrl;
+    if (roleUrl) {
+      try { roleAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(roleUrl)); } catch(e){ console.warn('role clip load failed', e); }
     }
 
-    async function fetchAndDecode(url) {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('fetch failed: ' + res.status);
-      const ab = await res.arrayBuffer();
-      return await audioContext.decodeAudioData(ab);
-    }
-
-    function renderNotesForRole() {
-      laneEl.querySelectorAll('.note').forEach(n => n.remove());
-      const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
-      const travelMs = 3000; // ノーツが上から降ってくる所要時間（ミリ秒）
-      const nowClientMs = Date.now() + serverOffset;
-      const baseServerStartMs = startServerTime || nowClientMs;
-      times.forEach((gtime, idx) => {
-        const targetMs = baseServerStartMs + Math.round(gtime*1000);
-        const appearAt = targetMs - travelMs;
-        const div = document.createElement('div');
-        div.className = 'note';
-        div.style.background = (assets[userRole] && assets[userRole].color) || '#444';
-        div.style.color = getContrastYIQ(assets[userRole] && assets[userRole].color || '#444');
-        div.textContent = `note ${idx+1}`;
-        div.style.bottom = `-40px`;
-        laneEl.appendChild(div);
-
-        const animate = () => {
-          const t = Date.now() + serverOffset;
-          const pct = (t - appearAt) / travelMs;
-          if (pct >= 1) {
-            div.style.bottom = `60px`;
-            setTimeout(()=>div.remove(), 1500);
-          } else if (pct <= 0) {
-            div.style.bottom = `-40px`;
-            requestAnimationFrame(animate);
-          } else {
-            const y = -40 + (60+40) * pct;
-            div.style.bottom = `${y}px`;
-            requestAnimationFrame(animate);
-          }
-        };
-        requestAnimationFrame(animate);
+    // schedule base audio playback in sync with startServerTime
+    if (startServerTime) {
+      scheduleBasePlayback();
+    } else {
+      // if startServerTime not present yet, wait for it to appear
+      const unsub = onValue(sessionRef, snap => {
+        const v = snap.val() || {};
+        if (v.startServerTime && v.status === 'running') {
+          startServerTime = v.startServerTime;
+          scheduleBasePlayback();
+          unsub(); // stop listening
+        }
       });
     }
 
-    // --- クリック記録と再生（判定） ---
-    async function registerClick() {
-      if (!startServerTime) {
-        const snap = await get(sessionRef);
-        startServerTime = snap.val() && snap.val().startServerTime;
-        if (!startServerTime) {
-          alert('まだ開始されていません');
-          return;
+    renderNotesForRole();
+  }
+
+  async function resolveUrlIfGs(urlOrObj) {
+    if (!urlOrObj) return null;
+    if (typeof urlOrObj === 'object') {
+      if (urlOrObj.clipUrl) return resolveUrlIfGs(urlOrObj.clipUrl);
+      if (urlOrObj.url) return resolveUrlIfGs(urlOrObj.url);
+    }
+    const url = String(urlOrObj);
+    if (url.startsWith('gs://')) {
+      const match = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
+      if (!match) throw new Error('gs:// URL parsing failed');
+      const path = match[2];
+      const sref = storageRef(storage, path);
+      const durl = await getDownloadURL(sref);
+      return durl;
+    }
+    return url;
+  }
+
+  async function fetchAndDecode(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('fetch failed: ' + res.status);
+    const ab = await res.arrayBuffer();
+    return await audioContext.decodeAudioData(ab);
+  }
+
+  function scheduleBasePlayback() {
+    if (!audioContext || !baseAudioBuffer || !startServerTime) return;
+    // compute how many ms have passed since startServerTime on server
+    const nowClientMs = Date.now() + serverOffset;
+    const elapsedMs = nowClientMs - startServerTime;
+    const elapsedSec = Math.max(0, elapsedMs/1000);
+    // schedule playback using offset parameter: source.start(when, offset)
+    if (baseSourceNode) {
+      try { baseSourceNode.disconnect(); } catch(e) {}
+      baseSourceNode = null;
+    }
+    baseSourceNode = audioContext.createBufferSource();
+    baseSourceNode.buffer = baseAudioBuffer;
+    baseSourceNode.connect(audioContext.destination);
+
+    if (elapsedSec <= 0) {
+      // start in the future
+      const when = audioContext.currentTime + (-elapsedSec);
+      baseSourceNode.start(when, 0);
+      console.log('base scheduled to start in', -elapsedSec, 's');
+    } else {
+      // start immediately with offset
+      if (elapsedSec >= baseAudioBuffer.duration) {
+        console.warn('base already ended');
+      } else {
+        baseSourceNode.start(audioContext.currentTime, elapsedSec);
+        console.log('base started from offset', elapsedSec, 's');
+      }
+    }
+  }
+
+  function renderNotesForRole() {
+    laneEl.querySelectorAll('.note').forEach(n => n.remove());
+    const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+    const travelMs = 3000; // ノーツが上から降ってくる時間（ms）
+    const nowClientMs = Date.now() + serverOffset;
+    const baseServerStartMs = startServerTime || nowClientMs;
+    times.forEach((gtime, idx) => {
+      const targetMs = baseServerStartMs + Math.round(gtime*1000);
+      const appearAt = targetMs - travelMs;
+      const div = document.createElement('div');
+      div.className = 'note';
+      div.style.background = (assets[userRole] && assets[userRole].color) || '#444';
+      div.style.color = getContrastYIQ(assets[userRole] && assets[userRole].color || '#444');
+      div.textContent = '';
+      laneEl.appendChild(div);
+      const animate = () => {
+        const t = Date.now() + serverOffset;
+        const pct = (t - appearAt) / travelMs;
+        if (pct >= 1) {
+          div.style.bottom = `60px`;
+          // if passed beyond judge line, remove after short delay
+          setTimeout(()=>div.remove(), 1600);
+        } else if (pct <= 0) {
+          div.style.bottom = `calc(100% - 18px)`; // start near top
+          requestAnimationFrame(animate);
+        } else {
+          // linear vertical movement from top to judgeLine
+          const laneHeight = laneEl.clientHeight;
+          const startY = laneHeight - 18; // top offset
+          const endY = 60; // judgeLine bottom
+          const y = startY - (startY - endY) * pct;
+          div.style.bottom = `${y}px`;
+          requestAnimationFrame(animate);
         }
-      }
-      const clientNow = Date.now();
-      const relativeMs = (clientNow + serverOffset) - startServerTime;
-      const relativeSec = Math.max(0, relativeMs/1000);
-      playHitSound(relativeSec);
-      localClicks.push({t: relativeSec});
-      try {
-        await set(ref(db, `sessions/${sessionId}/clicks/${uid}`), localClicks);
-      } catch (e) {
-        console.error('click write error', e);
-      }
-    }
-
-    function playHitSound(relativeSec) {
-      const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
-      let best = null, bestDiff = Infinity;
-      for (const gt of times) {
-        const d = Math.abs(gt - relativeSec);
-        if (d < bestDiff) { best = gt; bestDiff = d; }
-      }
-      const isPerfect = bestDiff <= 0.5;
-      const buffer = isPerfect ? roleAudioBuffer : (missAudioBuffer || roleAudioBuffer);
-      if (buffer && audioContext) {
-        const src = audioContext.createBufferSource();
-        src.buffer = buffer;
-        src.connect(audioContext.destination);
-        src.start();
-      }
-      showTransient(isPerfect ? 'P' : 'X');
-      broadcastAction(isPerfect ? 'perfect' : 'miss');
-    }
-
-    async function broadcastAction(kind) {
-      try {
-        const tRef = ref(db, `sessions/${sessionId}/realtimeActions/${uid}`);
-        await set(tRef, { kind, name: userName || uid, time: serverTimestamp() });
-        setTimeout(async () => {
-          try { await set(tRef, null); } catch(e){ }
-        }, 1200);
-      } catch(e) {
-        console.warn('broadcastAction failed', e);
-      }
-    }
-
-    onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
-      const v = snap.val() || {};
-      topBallsEl.innerHTML = '';
-      for (const [puid, data] of Object.entries(v)) {
-        if (!data) continue;
-        const b = document.createElement('div');
-        b.className = 'ball';
-        b.textContent = data.kind === 'perfect' ? 'P' : 'X';
-        topBallsEl.appendChild(b);
-      }
+      };
+      requestAnimationFrame(animate);
     });
+  }
 
-    function showTransient(txt) {
+  // --- 判定・記録 ---
+  async function registerClick() {
+    if (!startServerTime) {
+      const snap = await get(sessionRef);
+      startServerTime = snap.val() && snap.val().startServerTime;
+      if (!startServerTime) {
+        alert('まだ開始されていません');
+        return;
+      }
+    }
+    const clientNow = Date.now();
+    const relativeMs = (clientNow + serverOffset) - startServerTime;
+    const relativeSec = Math.max(0, relativeMs/1000);
+    const result = playHitSound(relativeSec);
+    localClicks.push({t: relativeSec});
+    try {
+      await set(ref(db, `sessions/${sessionId}/clicks/${uid}`), localClicks);
+    } catch (e) {
+      console.error('click write error', e);
+    }
+    // show transient English text
+    showTransientText(result === 'perfect' ? 'PERFECT' : 'MISS', result === 'perfect' ? '#8ef27a' : '#ff6b6b');
+  }
+
+  function playHitSound(relativeSec) {
+    const times = (assets && assets[userRole] && assets[userRole].guideTimes) || [];
+    let best = null, bestDiff = Infinity;
+    for (const gt of times) {
+      const d = Math.abs(gt - relativeSec);
+      if (d < bestDiff) { best = gt; bestDiff = d; }
+    }
+    const isPerfect = bestDiff <= 0.5;
+    const buffer = isPerfect ? roleAudioBuffer : (missAudioBuffer || roleAudioBuffer);
+    if (buffer && audioContext) {
+      const src = audioContext.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioContext.destination);
+      src.start();
+    }
+    broadcastAction(isPerfect ? 'perfect' : 'miss');
+    return isPerfect ? 'perfect' : 'miss';
+  }
+
+  async function broadcastAction(kind) {
+    try {
+      await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), { kind, name: userName || uid, time: serverTimestamp() });
+      setTimeout(async () => {
+        try { await set(ref(db, `sessions/${sessionId}/realtimeActions/${uid}`), null); } catch(e){}
+      }, 1200);
+    } catch(e) {
+      console.warn('broadcastAction failed', e);
+    }
+  }
+
+  onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
+    const v = snap.val() || {};
+    topBallsEl.innerHTML = '';
+    for (const [puid, data] of Object.entries(v)) {
+      if (!data) continue;
       const b = document.createElement('div');
       b.className = 'ball';
-      b.textContent = txt;
+      b.textContent = data.kind === 'perfect' ? 'P' : 'X';
       topBallsEl.appendChild(b);
-      setTimeout(()=>b.remove(), 1000);
+    }
+  });
+
+  function showTransientText(text, color) {
+    transientTextEl.style.color = color || '#fff';
+    transientTextEl.textContent = text;
+    transientTextEl.style.opacity = '1';
+    setTimeout(()=> { transientTextEl.style.opacity = '0'; }, 700);
+  }
+
+  // --- 合成（クライアント側） ---
+  function showResult(url) {
+    waitingEl.style.display = 'none';
+    gameEl.style.display = 'none';
+    resultEl.style.display = 'block';
+    finalAudioEl.src = url;
+  }
+
+  async function downloadResult() {
+    try {
+      const blob = await clientMixToWav();
+      const dlUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = dlUrl;
+      a.download = 'gassaku.wav';
+      a.click();
+    } catch (e) {
+      console.error(e);
+      alert('合成に失敗しました: ' + e.message);
+    }
+  }
+
+  async function clientMixToWav() {
+    if (!audioContext || !baseAudioBuffer) throw new Error('音声が準備できていません');
+    // temporarily set status to collecting/compiling in DB (optional)
+    try { await update(sessionRef, { status: 'collecting' }); } catch(e){ console.warn(e); }
+
+    const sampleRate = 44100;
+    const duration = baseAudioBuffer.duration + 1;
+    const off = new OfflineAudioContext(2, Math.ceil(duration*sampleRate), sampleRate);
+    // base
+    const baseSrc = off.createBufferSource();
+    baseSrc.buffer = baseAudioBuffer;
+    baseSrc.connect(off.destination);
+    baseSrc.start(0);
+
+    const snap = await get(sessionRef);
+    const session = snap.val() || {};
+    const allClicks = session.clicks || {};
+
+    // ensure auto role clicks exist in allClicks; if not, synthesize locally (but do not write to DB here)
+    const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
+    for (const r of rolesOrder) {
+      const hasPlayer = Object.values(session.players || {}).some(p => p.role === r);
+      const autoUid = `__auto_${r}`;
+      if (!hasPlayer && !allClicks[autoUid]) {
+        // synthesize into allClicks for mixing
+        const guideTimes = assets[r] && assets[r].guideTimes || [];
+        allClicks[autoUid] = guideTimes.map(t => ({ t }));
+      }
     }
 
-    // --- 合成（クライアント側）と結果表示 ---
-    function showResult(url) {
-      waitingEl.style.display = 'none';
-      gameEl.style.display = 'none';
-      resultEl.style.display = 'block';
-      finalAudioEl.src = url;
-    }
-
-    async function downloadResult() {
+    for (const [puid, arr] of Object.entries(allClicks)) {
+      const role = session.players && session.players[puid] && session.players[puid].role;
+      // for synthetic __auto_x entries, derive role from uid
+      let clipRole = role;
+      if (!clipRole && puid && puid.startsWith('__auto_')) clipRole = puid.replace('__auto_','');
+      const clipUrl = assets && assets[clipRole] && assets[clipRole].clipUrl;
+      if (!clipUrl) continue;
       try {
-        const blob = await clientMixToWav();
-        const dlUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = dlUrl;
-        a.download = 'gassaku.wav';
-        a.click();
-      } catch (e) {
-        console.error(e);
-        alert('合成に失敗しました: ' + e.message);
-      }
-    }
-
-    async function clientMixToWav() {
-      if (!audioContext || !baseAudioBuffer) throw new Error('音声が準備できていません');
-      const sampleRate = 44100;
-      const duration = baseAudioBuffer.duration + 1;
-      const off = new OfflineAudioContext(2, Math.ceil(duration*sampleRate), sampleRate);
-      const baseSrc = off.createBufferSource();
-      baseSrc.buffer = baseAudioBuffer;
-      baseSrc.connect(off.destination);
-      baseSrc.start(0);
-      const snap = await get(sessionRef);
-      const session = snap.val() || {};
-      const allClicks = session.clicks || {};
-      for (const [puid, arr] of Object.entries(allClicks)) {
-        const role = session.players && session.players[puid] && session.players[puid].role;
-        const clipUrl = (assets && assets[role] && assets[role].clipUrl) || null;
-        if (!clipUrl) continue;
-        try {
-          const resolved = await resolveUrlIfGs(clipUrl);
-          const res = await fetch(resolved);
-          if (!res.ok) continue;
-          const ab = await res.arrayBuffer();
-          const clipBuf = await off.decodeAudioData(ab);
-          for (const c of arr) {
-            const t = c.t;
-            const s = off.createBufferSource();
-            s.buffer = clipBuf;
-            s.connect(off.destination);
-            s.start(t);
-          }
-        } catch (e) { console.warn('mix clip failed', e); continue; }
-      }
-      const rendered = await off.startRendering();
-      const wavBuf = audioBufferToWav(rendered);
-      return new Blob([wavBuf], {type: 'audio/wav'});
-    }
-
-    // --- audio -> WAV helpers (same as before) ---
-    function audioBufferToWav(buffer, opt) {
-      opt = opt || {}
-      var numChannels = buffer.numberOfChannels
-      var sampleRate = buffer.sampleRate
-      var format = opt.float32 ? 3 : 1
-      var bitDepth = format === 3 ? 32 : 16
-      var result
-      if (numChannels === 2) {
-        result = interleave(buffer.getChannelData(0), buffer.getChannelData(1))
-      } else {
-        result = buffer.getChannelData(0)
-      }
-      return encodeWAV(result, format, sampleRate, numChannels, bitDepth)
-    }
-    function interleave(inputL, inputR){
-      var length = inputL.length + inputR.length
-      var result = new Float32Array(length)
-      var index = 0
-      var inputIndex = 0
-      while (index < length){
-        result[index++] = inputL[inputIndex]
-        result[index++] = inputR[inputIndex]
-        inputIndex++
-      }
-      return result
-    }
-    function encodeWAV(samples, format, sampleRate, numChannels, bitDepth){
-      var bytesPerSample = bitDepth / 8
-      var blockAlign = numChannels * bytesPerSample
-      var buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
-      var view = new DataView(buffer)
-      writeString(view, 0, 'RIFF')
-      view.setUint32(4, 36 + samples.length * bytesPerSample, true)
-      writeString(view, 8, 'WAVE')
-      writeString(view, 12, 'fmt ')
-      view.setUint32(16, 16, true)
-      view.setUint16(20, format === 3 ? 3 : 1, true)
-      view.setUint16(22, numChannels, true)
-      view.setUint32(24, sampleRate, true)
-      view.setUint32(28, sampleRate * blockAlign, true)
-      view.setUint16(32, blockAlign, true)
-      view.setUint16(34, bitDepth, true)
-      writeString(view, 36, 'data')
-      view.setUint32(40, samples.length * bytesPerSample, true)
-      if (format === 1) {
-        floatTo16BitPCM(view, 44, samples)
-      } else {
-        writeFloat32(view, 44, samples)
-      }
-      return buffer
-    }
-    function floatTo16BitPCM(output, offset, input){
-      for (var i = 0; i < input.length; i++, offset += 2){
-        var s = Math.max(-1, Math.min(1, input[i]))
-        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
-      }
-    }
-    function writeFloat32(output, offset, input){
-      for (var i = 0; i < input.length; i++, offset += 4){
-        output.setFloat32(offset, input[i], true)
-      }
-    }
-    function writeString(view, offset, string){
-      for (var i = 0; i < string.length; i++){
-        view.setUint8(offset + i, string.charCodeAt(i))
-      }
-    }
-
-    // --- server time offset 推定（複数 ping の中央値） ---
-    async function estimateServerOffset() {
-      const rand = Math.random().toString(36).slice(2, 8);
-      const pings = [];
-      for (let i=0;i<6;i++){
-        const t0 = Date.now();
-        const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
-        try {
-          await set(tempRef, {ts: serverTimestamp()});
-          const snap = await get(tempRef);
-          const serverTs = snap.val() && snap.val().ts;
-          const t1 = Date.now();
-          if (serverTs) {
-            const rtt = t1 - t0;
-            const offset = serverTs - (t0 + rtt/2);
-            pings.push(offset);
-          }
-        } catch(e) {
-          console.warn('ping failed', e);
+        const resolved = await resolveUrlIfGs(clipUrl);
+        const res = await fetch(resolved);
+        if (!res.ok) continue;
+        const ab = await res.arrayBuffer();
+        const clipBuf = await off.decodeAudioData(ab);
+        for (const c of arr) {
+          const t = c.t;
+          const s = off.createBufferSource();
+          s.buffer = clipBuf;
+          s.connect(off.destination);
+          s.start(t);
         }
-        await new Promise(r => setTimeout(r, 50));
-      }
-      if (pings.length) {
-        pings.sort((a,b)=>a-b);
-        serverOffset = pings[Math.floor(pings.length/2)];
-        console.log('serverOffset', serverOffset);
-      } else {
-        serverOffset = 0;
+      } catch (e) {
+        console.warn('mix clip failed', e);
+        continue;
       }
     }
 
-    // --- 補助関数 ---
-    function getContrastYIQ(hexcolor){
+    // update status to compiling
+    try { await update(sessionRef, { status: 'compiling' }); } catch(e){}
+
+    const rendered = await off.startRendering();
+
+    // mark finished and optionally upload final to storage (not implemented here)
+    try { await update(sessionRef, { status: 'finished' }); } catch(e){}
+
+    const wavBuf = audioBufferToWav(rendered);
+    return new Blob([wavBuf], {type: 'audio/wav'});
+  }
+
+  // --- audio -> wav helpers (same as before) ---
+  function audioBufferToWav(buffer, opt) {
+    opt = opt || {}
+    var numChannels = buffer.numberOfChannels
+    var sampleRate = buffer.sampleRate
+    var format = opt.float32 ? 3 : 1
+    var bitDepth = format === 3 ? 32 : 16
+    var result
+    if (numChannels === 2) {
+      result = interleave(buffer.getChannelData(0), buffer.getChannelData(1))
+    } else {
+      result = buffer.getChannelData(0)
+    }
+    return encodeWAV(result, format, sampleRate, numChannels, bitDepth)
+  }
+  function interleave(inputL, inputR){
+    var length = inputL.length + inputR.length
+    var result = new Float32Array(length)
+    var index = 0
+    var inputIndex = 0
+    while (index < length){
+      result[index++] = inputL[inputIndex]
+      result[index++] = inputR[inputIndex]
+      inputIndex++
+    }
+    return result
+  }
+  function encodeWAV(samples, format, sampleRate, numChannels, bitDepth){
+    var bytesPerSample = bitDepth / 8
+    var blockAlign = numChannels * bytesPerSample
+    var buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
+    var view = new DataView(buffer)
+    writeString(view, 0, 'RIFF')
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true)
+    writeString(view, 8, 'WAVE')
+    writeString(view, 12, 'fmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, format === 3 ? 3 : 1, true)
+    view.setUint16(22, numChannels, true)
+    view.setUint32(24, sampleRate, true)
+    view.setUint32(28, sampleRate * blockAlign, true)
+    view.setUint16(32, blockAlign, true)
+    view.setUint16(34, bitDepth, true)
+    writeString(view, 36, 'data')
+    view.setUint32(40, samples.length * bytesPerSample, true)
+    if (format === 1) {
+      floatTo16BitPCM(view, 44, samples)
+    } else {
+      writeFloat32(view, 44, samples)
+    }
+    return buffer
+  }
+  function floatTo16BitPCM(output, offset, input){
+    for (var i = 0; i < input.length; i++, offset += 2){
+      var s = Math.max(-1, Math.min(1, input[i]))
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+    }
+  }
+  function writeFloat32(output, offset, input){
+    for (var i = 0; i < input.length; i++, offset += 4){
+      output.setFloat32(offset, input[i], true)
+    }
+  }
+  function writeString(view, offset, string){
+    for (var i = 0; i < string.length; i++){
+      view.setUint8(offset + i, string.charCodeAt(i))
+    }
+  }
+
+  // --- server time ping ---
+  async function estimateServerOffset() {
+    const rand = Math.random().toString(36).slice(2, 8);
+    const pings = [];
+    for (let i=0;i<6;i++){
+      const t0 = Date.now();
+      const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
       try {
-        if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
-        const r = parseInt(hexcolor.substr(1,2),16);
-        const g = parseInt(hexcolor.substr(3,2),16);
-        const b = parseInt(hexcolor.substr(5,2),16);
-        const yiq = ((r*299)+(g*587)+(b*114))/1000;
-        return (yiq >= 128) ? '#000' : '#fff';
-      } catch(e){ return '#fff'; }
+        await set(tempRef, {ts: serverTimestamp()});
+        const snap = await get(tempRef);
+        const serverTs = snap.val() && snap.val().ts;
+        const t1 = Date.now();
+        if (serverTs) {
+          const rtt = t1 - t0;
+          const offset = serverTs - (t0 + rtt/2);
+          pings.push(offset);
+        }
+      } catch(e) {
+        console.warn('ping failed', e);
+      }
+      await new Promise(r => setTimeout(r, 50));
     }
+    if (pings.length) {
+      pings.sort((a,b)=>a-b);
+      serverOffset = pings[Math.floor(pings.length/2)];
+      console.log('serverOffset', serverOffset);
+    } else {
+      serverOffset = 0;
+    }
+  }
 
-    // --- リアルタイム: 他クライアントのアクションを1秒表示するロジック（DB側のrealtimeActionsを監視） ---
-    // 実装済み（上）
+  // --- util ---
+  function getContrastYIQ(hexcolor){
+    try {
+      if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
+      const r = parseInt(hexcolor.substr(1,2),16);
+      const g = parseInt(hexcolor.substr(3,2),16);
+      const b = parseInt(hexcolor.substr(5,2),16);
+      const yiq = ((r*299)+(g*587)+(b*114))/1000;
+      return (yiq >= 128) ? '#000' : '#fff';
+    } catch(e){ return '#fff'; }
+  }
 
-    // ------------------ 重要: エラー分析（簡潔） ------------------
-    // 下の警告やエラーが出たときの原因と対策をこのファイルの外で行ってください：
-    //
-    // 1) "Failed to load resource: the server responded with a status of 400 ()"
-    //    - これはブラウザが指定した URL にアクセスして 400 を受け取ったことを意味します。
-    //    - 原因候補:
-    //      ・assets の URL が間違っている（例: gs:// をそのまま fetch した／Storage の公開URLではない）
-    //      ・Storage のセキュリティ設定で直リンクが拒否されている（公開 URL ではなく署名付きURLが必要）
-    //    - 対策:
-    //      ・CONFIG.assets や DB の assets に入れるのは公開 https://... の URL、または gs:// の場合は Firebase Storage の getDownloadURL を使う（このファイルは gs:// を解決します）。
-    //      ・ブラウザの DevTools Network を見て、どのリクエストが 400 を返しているか確認してください。
-    //
-    // 2) "FirebaseError: Firebase: Error (auth/configuration-not-found)."
-    //    - 典型的な原因:
-    //      ・Firebase Console で Authentication → Sign-in method → Anonymous sign-in を有効化していない
-    //      ・firebaseConfig の値（apiKey, authDomain など）が間違っている
-    //    - 対策:
-    //      ・Firebase コンソールの Authentication → Sign-in method で「匿名」を ON にしてください。
-    //      ・firebaseConfig が正しいか確認。間違いがなければ Console のログも確認してください。
-    //
-    // 3) "FIREBASE WARNING: Firebase error. Please ensure that you have the URL of your Firebase Realtime Database instance configured correctly."
-    //    - 意味: firebaseConfig に databaseURL の設定がないか間違っているため、Realtime Database の接続が正しくできていません。
-    //    - 対策:
-    //      ・firebaseConfig に正しい databaseURL を入れてください（例: https://<project-id>-default-rtdb.firebaseio.com）。
-    //
-    // 追加注意:
-    //  - storageBucket の値は通常 "<project-id>.appspot.com" です。コンソールで実際のバケット名を確認して firebaseConfig.storageBucket に設定してください。
-    //  - Storage のファイルにアクセスする場合、Public にしておくか、gs://パスを getDownloadURL() してから fetch してください（このファイルは gs:// -> getDownloadURL を試みます）。
-    //
-    // ------------------------------------------------------------------
+  function adjustLaneHeight(){
+    // make lane adapt to viewport, keep at least 300px
+    const h = Math.max(360, window.innerHeight * 0.62);
+    laneEl.style.height = `${h}px`;
+  }
 
+  // ------------------ エラー分析メモ（短く） ------------------
+  // - "Failed to load resource: the server responded with a status of 400 ()"
+  //   => CONFIG.assets の URL が間違っているか、fetch できない。GitHub raw の場合 404/403 が出ることがある。Network タブを確認。
+  // - "FirebaseError: Firebase: Error (auth/configuration-not-found)."
+  //   => Firebase Console の Authentication → Anonymous を有効化してください。firebaseConfig が正しいかも確認。
+  // - "FIREBASE WARNING: ... ensure that you have the URL of your Firebase Realtime Database instance configured correctly."
+  //   => firebaseConfig.databaseURL を正しい URL に設定してください。
+  //
+  // 必要なら、あなたの CONFIG.assets の実際の URL を教えてください。私の方で fetch 成功/失敗をチェックして問題箇所を指摘します。
+  // ------------------------------------------------------------------
+
+  // End of script
   </script>
 </body>
 </html>
