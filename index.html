@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>合作音ゲー（統合版：管理UI追加）</title>
+  <title>合作音ゲー（統合版 + コード内編集可）</title>
   <style>
-    body{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "メイリオ", sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
+    body{font-family: system-ui, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; min-height:100vh; background:#f5f5f7}
     #top{padding:12px; display:flex; gap:8px; align-items:center; background:#fff; border-bottom:1px solid #ddd}
     #waiting,#game,#result{display:none; padding:12px}
     .role { padding:6px; border-radius:6px; margin:4px; display:inline-block; min-width:120px; white-space:pre-line}
@@ -18,13 +18,8 @@
     #roleTitle{margin-bottom:8px}
     button{cursor:pointer}
     .small{font-size:12px; color:#666}
-    input[type="text"], input[type="url"], textarea {padding:6px}
-    .adminPanel{border:1px solid #ddd; background:#fff; padding:10px; border-radius:8px; margin-top:12px}
-    .adminRow{display:flex; gap:8px; align-items:center; margin-bottom:8px}
-    .adminRow label{width:110px; font-size:13px}
-    .rolesTable{width:100%; border-collapse:collapse; margin-top:8px}
-    .rolesTable th, .rolesTable td{padding:6px; border:1px solid #eee; font-size:13px}
-    .smallBtn{font-size:12px; padding:4px 8px}
+    input[type="text"]{padding:6px}
+    pre.config { background:#222; color:#fff; padding:10px; border-radius:6px; overflow:auto; max-height:220px; }
   </style>
 </head>
 <body>
@@ -33,7 +28,6 @@
     <div style="margin-left:auto; display:flex; align-items:center; gap:8px">
       <div class="small">運営パス</div>
       <input id="adminPw" placeholder="1122" style="width:110px; padding:6px"/>
-      <button id="toggleAdmin" class="smallBtn">管理画面を開く</button>
     </div>
   </div>
 
@@ -44,61 +38,13 @@
     <div id="controls">
       <button id="startBtn" style="display:none">開始（運営のみ）</button>
     </div>
-
-    <!-- 管理パネル（運営のみ可視） -->
-    <div id="adminPanel" class="adminPanel" style="display:none">
-      <h4>運営：＠ / 音源 / 役割 を追加・編集</h4>
-
-      <div class="adminRow">
-        <label>ベース曲 (@)</label>
-        <input id="baseUrl" type="url" placeholder="https://.../kyoku.mp3" style="flex:1"/>
-        <button id="saveBaseBtn" class="smallBtn">保存</button>
-        <button id="playBaseBtn" class="smallBtn">再生</button>
-      </div>
-
-      <div class="adminRow">
-        <label>miss 音</label>
-        <input id="missUrl" type="url" placeholder="https://.../miss.mp3" style="flex:1"/>
-        <button id="saveMissBtn" class="smallBtn">保存</button>
-        <button id="playMissBtn" class="smallBtn">再生</button>
-      </div>
-
-      <hr/>
-
-      <h5>役割（A〜など）を追加 / 編集</h5>
-      <div class="adminRow">
-        <label>アルファベット</label>
-        <input id="roleKey" type="text" placeholder="A" style="width:80px"/>
-        <label>色</label>
-        <input id="roleColor" type="text" placeholder="#FF6666" style="width:110px"/>
-      </div>
-      <div class="adminRow">
-        <label>音源URL</label>
-        <input id="roleClipUrl" type="url" placeholder="https://.../A_note.mp3" style="flex:1"/>
-        <button id="playRoleClip" class="smallBtn">試聴</button>
-      </div>
-      <div class="adminRow">
-        <label>指標時間 (複数可)</label>
-        <textarea id="roleGuideTimes" placeholder="例: 3:00.23, 2:42.32, 180.23 などをカンマ区切りで" style="flex:1; height:64px"></textarea>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:6px">
-        <button id="addOrUpdateRoleBtn" class="smallBtn">追加 / 更新</button>
-        <button id="clearRoleFormBtn" class="smallBtn">フォームクリア</button>
-      </div>
-
-      <div style="margin-top:12px">
-        <strong>既存の役割</strong>
-        <table class="rolesTable" id="rolesTable">
-          <thead><tr><th>Key</th><th>色</th><th>clipUrl</th><th>guideTimes</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div style="margin-top:12px" class="small">
-        - 指標時間のフォーマットは複数対応します: HH:MM:SS(.ms)、MM:SS(.ms)、MM:SS:ms、または秒の小数（例: 180.23）。解析して秒に変換します。<br>
-        - 保存すると Realtime Database の sessions/{sessionId}/assets と rolesOrder を更新します。<br>
-      </div>
-    </div>
+    <h4>コード内で編集できるセクション（サンプル表示）</h4>
+    <p class="small">
+      下の JSON はこのファイル内の CONFIG.assets に相当する「いつでも追加できるコード」の雛形です。
+      実行時は CONFIG を書き換えて保存（＝直接コードに打ち込む）してください。
+      （Firebase の assets と競合しないよう、CONFIG.overrideAssets=true にするとこちらが優先されます）
+    </p>
+    <pre class="config" id="configPreview"></pre>
   </div>
 
   <div id="game">
@@ -118,18 +64,74 @@
     </div>
   </div>
 
-  <!-- Firebase + アプリ本体を1ファイルに統合 -->
   <script type="module">
+/*
+  このファイルは統合版コードに「コード内で編集できる資産定義（@、A〜など）」を追加したものです。
+
+  使い方（簡単）
+  1) 下の CONFIG セクションを直接このファイルに書き換えます（つまり「打ち込む」）。
+     - CONFIG.overrideAssets を true にすれば、Realtime DB の assets よりこちらが優先されます。
+     - guideTimes は hh:mm:ss(.ms) / mm:ss(.ms) / ss(.ms) / 数字（秒）を受け付けます。文字列形式もパースします。
+  2) Firebase の設定や Realtime Database、Storage、Auth（匿名ログイン）の有効化は必要です。
+     エラーが出る場合は下のエラー説明を参照してください。
+
+  「いつでも追加できるコード」仕様（このコメントをそのままコード内に残しています）：
+    ・@（一つ）: ベース曲のURL(mp3)。時間（再生時間）が重要。
+    ・A,B,...: 各アルファベット設定:
+      - clipUrl: mp3 のURL（このアルファベットが演奏する“一音”）
+      - color: レーン表示用カラー
+      - guideTimes: ['3:00.23','2:42.32', 10.5] のように指定（@ の再生時間に対する秒）
+    ・miss: ミス時の音
+    ※ パーフェクト判定: 押した時刻と guideTime の差が <= 0.5s
+*/
+
+    // ------------------ CONFIG（ここを直接編集してください） ------------------
+    const CONFIG = {
+      // overrideAssets = true にすると、Realtime DB の assets を無視してこのCONFIGの内容を使います。
+      overrideAssets: true,
+
+      // assets の書き方（サンプル）
+      // - 直接 https の公開 URL を使うか、gs://bucket/path の形式でもOK（後者は Storage の getDownloadURL を使って解決します）
+      // - guideTimes は文字列または数値の配列で指定可能
+      assets: {
+        "@": "https://example.com/kyoku.mp3", // ← ここを実際のベース曲URLに書き換えてください
+        "miss": "https://example.com/miss.mp3",
+        // サンプル: A の設定
+        "A": {
+          clipUrl: "https://example.com/A_note.mp3",
+          color: "#FF6666",
+          guideTimes: ["3:00.23", "2:42.32", "10.5"] // mm:ss.ms  等の文字列や秒数の数値が使えます
+        },
+        "B": {
+          clipUrl: "https://example.com/B_note.mp3",
+          color: "#66CCFF",
+          guideTimes: ["0:30.00", "0:45.5"]
+        }
+        // 以降 C,D... を必要に応じて追加
+      },
+
+      // rolesOrder を指定すると割り当て順を制御できます（A,B,C,...）
+      rolesOrder: ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+    };
+    // ---------------------------------------------------------------------------
+
     // --- Firebase 初期化 ---
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-    import { getDatabase, ref, onValue, set, push, update, get, child, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+    import { getDatabase, ref, onValue, set, update, get, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+    import { getStorage, ref as storageRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
 
+    // --- IMPORTANT ---
+    // 以下の firebaseConfig を必要に応じて書き換えてください（特に databaseURL と storageBucket が重要）。
+    // ログに "configuration-not-found" が出る場合は Firebase Console で Authentication -> Sign-in method -> Anonymous を有効化してください。
     const firebaseConfig = {
       apiKey: "AIzaSyBePhUfYinZ02-1BWbZvzV3IBwoAYh-kxE",
       authDomain: "suisougaku-bdcc0.firebaseapp.com",
       projectId: "suisougaku-bdcc0",
-      storageBucket: "suisougaku-bdcc0.firebasestorage.app",
+      // ← Realtime Database を使用する場合は databaseURL を必ず入れてください（下は警告ログに出ていた値）
+      databaseURL: "https://suisougaku-bdcc0-default-rtdb.firebaseio.com/",
+      // storageBucket は通常 "<project-id>.appspot.com" です。もし異なる場合はコンソールで確認して書き換えてください。
+      storageBucket: "suisougaku-bdcc0.appspot.com",
       messagingSenderId: "636001978886",
       appId: "1:636001978886:web:24e68f1ef5b66dc7fa5187",
       measurementId: "G-Y04PFJ9BQ6"
@@ -138,6 +140,7 @@
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
     const auth = getAuth(app);
+    const storage = getStorage(app);
 
     // --- 設定／グローバル変数 ---
     const sessionId = "session-proto-1"; // 必要なら動的生成に変更
@@ -150,37 +153,17 @@
     let startServerTime = null;
     let serverOffset = 0; // ms: serverTime - (Date.now() + RTT/2)
     let assets = null;
+    let audioContext = null;
     let baseAudioBuffer = null;
     let roleAudioBuffer = null;
     let missAudioBuffer = null;
     let localClicks = []; // [{t: seconds}, ...]
-    let audioContext = null;
     let currentSessionSnapshot = null;
 
-    // --- DOM Elements ---
+    // --- DOM ---
     const joinBtn = document.getElementById('joinBtn');
     const startBtn = document.getElementById('startBtn');
     const adminPwInput = document.getElementById('adminPw');
-    const toggleAdminBtn = document.getElementById('toggleAdmin');
-    const adminPanelEl = document.getElementById('adminPanel');
-
-    const baseUrlInput = document.getElementById('baseUrl');
-    const saveBaseBtn = document.getElementById('saveBaseBtn');
-    const playBaseBtn = document.getElementById('playBaseBtn');
-
-    const missUrlInput = document.getElementById('missUrl');
-    const saveMissBtn = document.getElementById('saveMissBtn');
-    const playMissBtn = document.getElementById('playMissBtn');
-
-    const roleKeyInput = document.getElementById('roleKey');
-    const roleColorInput = document.getElementById('roleColor');
-    const roleClipUrlInput = document.getElementById('roleClipUrl');
-    const roleGuideTimesInput = document.getElementById('roleGuideTimes');
-    const addOrUpdateRoleBtn = document.getElementById('addOrUpdateRoleBtn');
-    const clearRoleFormBtn = document.getElementById('clearRoleFormBtn');
-    const rolesTableBody = document.querySelector('#rolesTable tbody');
-    const playRoleClipBtn = document.getElementById('playRoleClip');
-
     const rolesListEl = document.getElementById('rolesList');
     const waitingEl = document.getElementById('waiting');
     const gameEl = document.getElementById('game');
@@ -191,12 +174,25 @@
     const finalAudioEl = document.getElementById('finalAudio');
     const downloadBtn = document.getElementById('downloadBtn');
     const backBtn = document.getElementById('backBtn');
+    const configPreview = document.getElementById('configPreview');
 
-    // --- 初期化 ---
+    // show CONFIG preview so you know what to edit in-file
+    configPreview.textContent = JSON.stringify(CONFIG, null, 2);
+
+    // --- init ---
     (async function init(){
-      await signInAnonymously(auth);
-      uid = auth.currentUser.uid;
-      console.log('signed in uid=', uid);
+      try {
+        await signInAnonymously(auth);
+        uid = auth.currentUser.uid;
+        console.log('signed in uid=', uid);
+      } catch (err) {
+        // よくあるエラーの説明をわかりやすく出す（後述する分析と対策参照）
+        console.error(err);
+        alert('Firebase Anonymous Sign-in に失敗しました。\n' +
+              '原因の多くは：Firebase Console で「Authentication → Sign-in method → Anonymous」を有効化していないこと、\n' +
+              'または firebaseConfig に databaseURL / storageBucket が正しく設定されていないことです。\n\n' +
+              '詳細コンソールログを確認してください。');
+      }
 
       joinBtn.addEventListener('click', joinFlow);
       startBtn.addEventListener('click', onStartClicked);
@@ -206,52 +202,28 @@
         waitingEl.style.display = 'block';
       });
 
-      toggleAdminBtn.addEventListener('click', () => {
-        const visible = adminPanelEl.style.display !== 'none';
-        adminPanelEl.style.display = visible ? 'none' : 'block';
-      });
-      adminPwInput.addEventListener('input', () => { evaluateAdmin(); });
-
-      // admin panel actions
-      saveBaseBtn.addEventListener('click', saveBaseAsset);
-      playBaseBtn.addEventListener('click', () => testPlayUrl(baseUrlInput.value));
-      saveMissBtn.addEventListener('click', saveMissAsset);
-      playMissBtn.addEventListener('click', () => testPlayUrl(missUrlInput.value));
-      playRoleClipBtn.addEventListener('click', () => testPlayUrl(roleClipUrlInput.value));
-      addOrUpdateRoleBtn.addEventListener('click', addOrUpdateRole);
-      clearRoleFormBtn.addEventListener('click', clearRoleForm);
-
       // DB を監視して UI を更新
       onValue(sessionRef, snapshot => {
         const v = snapshot.val();
         currentSessionSnapshot = v || {};
-        assets = currentSessionSnapshot.assets || {};
+        // Use CONFIG assets when overrideAssets is true OR when DB has no assets
+        if (CONFIG.overrideAssets || !(currentSessionSnapshot.assets && Object.keys(currentSessionSnapshot.assets).length)) {
+          // normalize guideTimes to seconds
+          assets = normalizeConfigAssets(CONFIG.assets || {});
+        } else {
+          assets = normalizeConfigAssets(currentSessionSnapshot.assets || {});
+        }
         startServerTime = currentSessionSnapshot.startServerTime || null;
         updateRolesView(currentSessionSnapshot);
-        // ステータス管理
         const status = currentSessionSnapshot.status || 'waiting';
         if (status === 'running') {
           showGame();
         } else if (status === 'finished' && currentSessionSnapshot.finalUrl) {
           showResult(currentSessionSnapshot.finalUrl);
         } else {
-          // waiting
           waitingEl.style.display = 'block';
           gameEl.style.display = 'none';
           resultEl.style.display = 'none';
-        }
-      });
-
-      // realtimeActions 監視（他者のアクションを表示）
-      onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
-        const v = snap.val() || {};
-        topBallsEl.innerHTML = '';
-        for (const [puid, data] of Object.entries(v)) {
-          if (!data) continue;
-          const b = document.createElement('div');
-          b.className = 'ball';
-          b.textContent = data.kind === 'perfect' ? 'P' : 'X';
-          topBallsEl.appendChild(b);
         }
       });
 
@@ -259,167 +231,67 @@
       await estimateServerOffset();
     })();
 
-    // --- 管理（Admin）関連 ---
-    function evaluateAdmin() {
-      isAdmin = adminPwInput.value === '1122';
-      adminPanelEl.style.display = isAdmin ? 'block' : 'none';
-      startBtn.style.display = isAdmin ? 'inline-block' : 'none';
-      // populate admin form with current assets if admin
-      if (isAdmin && assets) {
-        baseUrlInput.value = assets['@'] || '';
-        missUrlInput.value = assets['miss'] || '';
-        populateRolesTable();
+    // ------------------ UTIL: asset normalizer & time parser ------------------
+    function normalizeConfigAssets(rawAssets) {
+      const out = {};
+      for (const k of Object.keys(rawAssets || {})) {
+        if (k === '@' || k === 'miss') {
+          out[k] = rawAssets[k];
+          continue;
+        }
+        const v = rawAssets[k] || {};
+        out[k] = {
+          clipUrl: v.clipUrl || v.url || null,
+          color: v.color || '#777',
+          guideTimes: (v.guideTimes || []).map(parseTimeToSeconds)
+        };
       }
-    }
-
-    async function saveBaseAsset(){
-      const url = baseUrlInput.value.trim();
-      if (!url) { alert('@ の URL を入力してください'); return; }
-      const s = await get(sessionRef);
-      const sess = s.val() || {};
-      const newAssets = sess.assets || {};
-      newAssets['@'] = url;
-      await update(sessionRef, { assets: newAssets });
-      alert('ベース曲(@)を保存しました');
-    }
-    async function saveMissAsset(){
-      const url = missUrlInput.value.trim();
-      if (!url) { alert('miss 音の URL を入力してください'); return; }
-      const s = await get(sessionRef);
-      const sess = s.val() || {};
-      const newAssets = sess.assets || {};
-      newAssets['miss'] = url;
-      await update(sessionRef, { assets: newAssets });
-      alert('miss 音を保存しました');
-    }
-
-    async function addOrUpdateRole(){
-      const key = (roleKeyInput.value || '').trim();
-      if (!key) { alert('アルファベットを入力してください (例: A)'); return; }
-      const color = (roleColorInput.value || '').trim() || '#777';
-      const clipUrl = (roleClipUrlInput.value || '').trim();
-      if (!clipUrl) { if(!confirm('clipUrl が空です。保存しますか？')) return; }
-      const rawTimes = roleGuideTimesInput.value || '';
-      const guideTimes = parseGuideTimesList(rawTimes);
-
-      // read current session
-      const snap = await get(sessionRef);
-      const sess = snap.val() || {};
-      const newAssets = sess.assets || {};
-      newAssets[key] = { clipUrl: clipUrl, color: color, guideTimes: guideTimes };
-      // rolesOrder update: append if not exists
-      const rolesOrder = Array.isArray(sess.rolesOrder) ? sess.rolesOrder.slice() : Object.keys(newAssets).filter(k => k !== '@' && k !== 'miss');
-      if (!rolesOrder.includes(key)) rolesOrder.push(key);
-      await update(sessionRef, { assets: newAssets, rolesOrder: rolesOrder });
-      alert(`役割 ${key} を保存しました`);
-      clearRoleForm();
-    }
-
-    function parseGuideTimesList(raw){
-      // カンマや改行で分割、空白トリム、parseTimeで秒(float)に
-      const parts = raw.split(/[,|\n]+/).map(s => s.trim()).filter(Boolean);
-      const out = [];
-      for (const p of parts) {
-        const v = parseTimeToSeconds(p);
-        if (!isNaN(v)) out.push(Number(v.toFixed(3)));
-      }
+      // ensure @ and miss keys pass-through raw values
+      if (rawAssets['@']) out['@'] = rawAssets['@'];
+      if (rawAssets['miss']) out['miss'] = rawAssets['miss'];
       return out;
     }
 
-    function parseTimeToSeconds(s){
-      // 対応例:
-      // "3:00.23" -> 3分 0.23s => 180.23
-      // "2:42:32" -> 2分 42.32s? or H:M:S ambiguous.
-      // We'll support: H:MM:SS(.ms), MM:SS(.ms), MM:SS:ms (treat last as decimal fraction if contains '.' else treat as seconds), and plain seconds float.
-      if (!s) return NaN;
-      s = s.trim();
-      if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s); // seconds as float
-      const cols = s.split(':').map(x => x.trim()).filter(Boolean);
-      if (cols.length === 1) return parseFloat(cols[0]) || NaN;
-      if (cols.length === 2) {
-        // MM:SS(.ms) or MM:SS:ms style with dot
-        const m = parseInt(cols[0],10);
-        const sec = parseFloat(cols[1].replace(',', '.'));
-        if (isNaN(m) || isNaN(sec)) return NaN;
-        return m*60 + sec;
+    // parse many common formats:
+    // - number -> seconds
+    // - "mm:ss.mm", "m:ss", "hh:mm:ss.ms", "mm:ss:ms" etc.
+    function parseTimeToSeconds(val) {
+      if (val === null || val === undefined) return 0;
+      if (typeof val === 'number') return val;
+      const s = String(val).trim();
+      if (!s) return 0;
+      // if contains '.' and no ':' -> float seconds
+      if (s.indexOf(':') === -1) {
+        const f = parseFloat(s);
+        return isFinite(f) ? f : 0;
       }
-      if (cols.length >= 3) {
-        // treat as H:MM:SS(.ms) or MM:SS:ms (if first small treat hours)
-        const parts = cols.map(x => x.replace(',', '.'));
-        const h = parseInt(parts[0],10);
-        const mm = parseInt(parts[1],10);
-        let ss = parseFloat(parts.slice(2).join(':')); // join rest as seconds part (handles "32" or "32.12")
-        if (isNaN(h) || isNaN(mm) || isNaN(ss)) {
-          // fallback: if format like 3:00:23 (maybe mm:ss:cs) -> treat first as minutes, second as seconds, third as centiseconds
-          // try alternative: first -> minutes, second-> seconds, third -> centiseconds
-          const m = parseInt(parts[0],10);
-          const s2 = parseInt(parts[1],10);
-          const cs = parseInt(parts[2],10);
-          if (!isNaN(m) && !isNaN(s2) && !isNaN(cs)) {
-            // treat cs as fractional part (two digits -> /100, three digits -> /1000)
-            let denom = 100;
-            if (parts[2].length === 3) denom = 1000;
-            return m*60 + s2 + cs/denom;
-          }
-          return NaN;
-        }
-        return h*3600 + mm*60 + ss;
+      // split by colon
+      const parts = s.split(':').map(p => p.trim());
+      // support 3 parts => hh:mm:ss(.ms)
+      // 2 parts => mm:ss(.ms)
+      // 1 part handled above
+      let seconds = 0;
+      if (parts.length === 3) {
+        const h = parseInt(parts[0]) || 0;
+        const m = parseInt(parts[1]) || 0;
+        const sec = parseFloat(parts[2].replace(',', '.')) || 0;
+        seconds = h*3600 + m*60 + sec;
+      } else if (parts.length === 2) {
+        const m = parseInt(parts[0]) || 0;
+        const sec = parseFloat(parts[1].replace(',', '.')) || 0;
+        seconds = m*60 + sec;
+      } else {
+        seconds = parseFloat(parts[0].replace(',', '.')) || 0;
       }
-      return NaN;
+      return seconds;
     }
 
-    function clearRoleForm(){
-      roleKeyInput.value = '';
-      roleColorInput.value = '';
-      roleClipUrlInput.value = '';
-      roleGuideTimesInput.value = '';
-    }
-
-    async function populateRolesTable(){
-      rolesTableBody.innerHTML = '';
-      const sess = currentSessionSnapshot || {};
-      const a = sess.assets || {};
-      const keys = Object.keys(a).filter(k => k !== '@' && k !== 'miss').sort();
-      for (const key of keys) {
-        const info = a[key] || {};
-        const tr = document.createElement('tr');
-        const tdKey = document.createElement('td'); tdKey.textContent = key;
-        const tdColor = document.createElement('td'); tdColor.textContent = info.color || ''; tdColor.style.background = info.color || '';
-        const tdClip = document.createElement('td'); tdClip.textContent = info.clipUrl || '';
-        const tdTimes = document.createElement('td'); tdTimes.textContent = (info.guideTimes || []).join(', ');
-        const tdOps = document.createElement('td');
-        const editBtn = document.createElement('button'); editBtn.textContent = '編集'; editBtn.className='smallBtn';
-        editBtn.addEventListener('click', () => {
-          roleKeyInput.value = key;
-          roleColorInput.value = info.color || '';
-          roleClipUrlInput.value = info.clipUrl || '';
-          roleGuideTimesInput.value = (info.guideTimes || []).map(x => Number(x).toFixed(3)).join(', ');
-        });
-        const delBtn = document.createElement('button'); delBtn.textContent = '削除'; delBtn.className='smallBtn';
-        delBtn.addEventListener('click', async () => {
-          if (!confirm(`役割 ${key} を本当に削除しますか？`)) return;
-          const snap = await get(sessionRef);
-          const sess2 = snap.val() || {};
-          const newAssets = sess2.assets || {};
-          delete newAssets[key];
-          let rolesOrder = Array.isArray(sess2.rolesOrder) ? sess2.rolesOrder.filter(r => r !== key) : Object.keys(newAssets).filter(k => k !== '@' && k !== 'miss');
-          await update(sessionRef, { assets: newAssets, rolesOrder });
-          populateRolesTable();
-        });
-        const testBtn = document.createElement('button'); testBtn.textContent = '試聴'; testBtn.className='smallBtn';
-        testBtn.addEventListener('click', () => testPlayUrl(info.clipUrl));
-        tdOps.appendChild(editBtn); tdOps.appendChild(document.createTextNode(' ')); tdOps.appendChild(testBtn); tdOps.appendChild(document.createTextNode(' ')); tdOps.appendChild(delBtn);
-        tr.appendChild(tdKey); tr.appendChild(tdColor); tr.appendChild(tdClip); tr.appendChild(tdTimes); tr.appendChild(tdOps);
-        rolesTableBody.appendChild(tr);
-      }
-    }
-
-    // --- UI / DB 操作 (参加・割当等) ---
+    // --- UI / DB 操作 ---
     function updateRolesView(sessionData) {
       rolesListEl.innerHTML = '';
-      const rolesOrder = sessionData.rolesOrder || Object.keys(sessionData.assets || {}).filter(k => k !== '@' && k !== 'miss');
+      const rolesOrder = sessionData.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
       (rolesOrder).forEach(role => {
-        const info = sessionData.assets && sessionData.assets[role];
+        const info = assets && assets[role];
         const color = info?.color || '#777';
         const el = document.createElement('div');
         el.className = 'role';
@@ -436,36 +308,28 @@
         rolesListEl.appendChild(el);
       });
 
-      // 管理者判定
+      // 管理者判定（簡易：入力パスワードが1122なら運営とみなす）
       isAdmin = adminPwInput.value === '1122';
       startBtn.style.display = isAdmin ? 'inline-block' : 'none';
-      adminPanelEl.style.display = isAdmin ? adminPanelEl.style.display : 'none';
-      if (isAdmin) {
-        baseUrlInput.value = sessionData.assets && sessionData.assets['@'] || '';
-        missUrlInput.value = sessionData.assets && sessionData.assets['miss'] || '';
-        populateRolesTable();
-      }
     }
 
     async function joinFlow(){
       const name = prompt('名前を入力してください');
       if (!name) return;
       userName = name.trim() || '名無し';
-      // assign next role
       const snap = await get(sessionRef);
       const session = snap.val() || {};
       const players = session.players || {};
-      const rolesOrder = session.rolesOrder || Object.keys(session.assets || {}).filter(k => k !== '@' && k !== 'miss');
+      const rolesOrder = session.rolesOrder || CONFIG.rolesOrder || Object.keys(assets || {}).filter(k => k !== '@' && k !== 'miss');
       const assigned = Object.values(players).map(p => p.role);
       let roleToAssign = null;
       for (const r of rolesOrder) {
         if (!assigned.includes(r)) { roleToAssign = r; break; }
       }
-      if (!roleToAssign) roleToAssign = rolesOrder.length ? rolesOrder[assigned.length % rolesOrder.length] : null;
+      if (!roleToAssign) roleToAssign = rolesOrder[assigned.length % rolesOrder.length];
       const playerRef = ref(db, `sessions/${sessionId}/players/${uid}`);
       await set(playerRef, { name: userName, role: roleToAssign, joinedAt: Date.now() });
       userRole = roleToAssign;
-      // show waiting screen
       waitingEl.style.display = 'block';
       gameEl.style.display = 'none';
       resultEl.style.display = 'none';
@@ -473,10 +337,14 @@
 
     async function onStartClicked(){
       if (!isAdmin) { alert('運営パスが必要です'); return; }
-      await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
+      try {
+        await update(sessionRef, { status: 'running', startServerTime: serverTimestamp() });
+      } catch (e) {
+        console.error('start failed', e);
+        alert('開始に失敗しました。Firebase の書き込み権限や network を確認してください。');
+      }
     }
 
-    // --- ゲーム開始、ロード、ノーツ表示 ---
     function showGame(){
       waitingEl.style.display = 'none';
       gameEl.style.display = 'block';
@@ -498,23 +366,55 @@
     }
 
     async function loadAssetsAndStart(){
+      // assets['@'] が URL（string）か、CONFIG 形式の値であることを前提
       if (!assets || !assets['@']) {
-        console.error('@ asset missing in session assets. Put your kyoku.mp3 into session assets in Realtime DB (assets.@ = public URL).');
-        alert('ベース曲(@)がセッションに設定されていません。運営がassetsを設定してください。');
+        console.error('@ asset missing in assets. Put your kyoku.mp3 into CONFIG.assets or sessions/<sessionId>/assets in Realtime DB (assets.@ = public URL).');
+        alert('ベース曲(@)が設定されていません。CONFIG.assets または Realtime DB に設定してください。');
         return;
       }
       try {
-        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        baseAudioBuffer = await fetchAndDecode(assets['@']);
+        baseAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(assets['@']));
       } catch (e) {
         console.error('base load error', e);
         alert('ベース曲の読み込みに失敗しました（URL確認）');
         return;
       }
-      missAudioBuffer = assets['miss'] ? await fetchAndDecode(assets['miss']) : null;
-      const roleUrl = assets[userRole]?.clipUrl;
-      if (roleUrl) roleAudioBuffer = await fetchAndDecode(roleUrl);
+      if (assets['miss']) {
+        try { missAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(assets['miss'])); } catch(e){ console.warn('miss load failed', e); }
+      }
+      const roleUrl = assets[userRole] && assets[userRole].clipUrl;
+      if (roleUrl) {
+        try { roleAudioBuffer = await fetchAndDecode(await resolveUrlIfGs(roleUrl)); } catch(e){ console.warn('role clip load failed', e); }
+      }
       renderNotesForRole();
+    }
+
+    async function resolveUrlIfGs(urlOrObj) {
+      // urlOrObj could be a string or object; return a https URL
+      if (!urlOrObj) return null;
+      if (typeof urlOrObj === 'object') {
+        // object with clipUrl or raw string in "url"
+        if (urlOrObj.clipUrl) return resolveUrlIfGs(urlOrObj.clipUrl);
+        if (urlOrObj.url) return resolveUrlIfGs(urlOrObj.url);
+      }
+      const url = String(urlOrObj);
+      if (url.startsWith('gs://')) {
+        try {
+          // convert gs://bucket/path to storage ref and getDownloadURL
+          // gs://bucket/path -> path after bucket
+          const match = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
+          if (!match) throw new Error('gs:// URL parsing failed');
+          const path = match[2];
+          const sref = storageRef(storage, path);
+          const durl = await getDownloadURL(sref);
+          return durl;
+        } catch (e) {
+          console.error('getDownloadURL failed for', url, e);
+          throw e;
+        }
+      }
+      // if already https, return as-is
+      return url;
     }
 
     async function fetchAndDecode(url) {
@@ -535,8 +435,8 @@
         const appearAt = targetMs - travelMs;
         const div = document.createElement('div');
         div.className = 'note';
-        div.style.background = assets[userRole]?.color || '#444';
-        div.style.color = getContrastYIQ(assets[userRole]?.color || '#444');
+        div.style.background = (assets[userRole] && assets[userRole].color) || '#444';
+        div.style.color = getContrastYIQ(assets[userRole] && assets[userRole].color || '#444');
         div.textContent = `note ${idx+1}`;
         div.style.bottom = `-40px`;
         laneEl.appendChild(div);
@@ -576,8 +476,7 @@
       playHitSound(relativeSec);
       localClicks.push({t: relativeSec});
       try {
-        const clicksRef = ref(db, `sessions/${sessionId}/clicks/${uid}`);
-        await set(clicksRef, localClicks);
+        await set(ref(db, `sessions/${sessionId}/clicks/${uid}`), localClicks);
       } catch (e) {
         console.error('click write error', e);
       }
@@ -603,10 +502,28 @@
     }
 
     async function broadcastAction(kind) {
-      const tRef = ref(db, `sessions/${sessionId}/realtimeActions/${uid}`);
-      await set(tRef, { kind, name: userName || uid, time: serverTimestamp() });
-      setTimeout(async () => { try { await set(tRef, null); } catch(e){} }, 1200);
+      try {
+        const tRef = ref(db, `sessions/${sessionId}/realtimeActions/${uid}`);
+        await set(tRef, { kind, name: userName || uid, time: serverTimestamp() });
+        setTimeout(async () => {
+          try { await set(tRef, null); } catch(e){ }
+        }, 1200);
+      } catch(e) {
+        console.warn('broadcastAction failed', e);
+      }
     }
+
+    onValue(ref(db, `sessions/${sessionId}/realtimeActions`), snap => {
+      const v = snap.val() || {};
+      topBallsEl.innerHTML = '';
+      for (const [puid, data] of Object.entries(v)) {
+        if (!data) continue;
+        const b = document.createElement('div');
+        b.className = 'ball';
+        b.textContent = data.kind === 'perfect' ? 'P' : 'X';
+        topBallsEl.appendChild(b);
+      }
+    });
 
     function showTransient(txt) {
       const b = document.createElement('div');
@@ -652,26 +569,29 @@
       const allClicks = session.clicks || {};
       for (const [puid, arr] of Object.entries(allClicks)) {
         const role = session.players && session.players[puid] && session.players[puid].role;
-        const clipUrl = session.assets && session.assets[role] && session.assets[role].clipUrl;
+        const clipUrl = (assets && assets[role] && assets[role].clipUrl) || null;
         if (!clipUrl) continue;
-        const res = await fetch(clipUrl);
-        if (!res.ok) continue;
-        const ab = await res.arrayBuffer();
-        const clipBuf = await off.decodeAudioData(ab);
-        for (const c of arr) {
-          const t = c.t;
-          const s = off.createBufferSource();
-          s.buffer = clipBuf;
-          s.connect(off.destination);
-          s.start(t);
-        }
+        try {
+          const resolved = await resolveUrlIfGs(clipUrl);
+          const res = await fetch(resolved);
+          if (!res.ok) continue;
+          const ab = await res.arrayBuffer();
+          const clipBuf = await off.decodeAudioData(ab);
+          for (const c of arr) {
+            const t = c.t;
+            const s = off.createBufferSource();
+            s.buffer = clipBuf;
+            s.connect(off.destination);
+            s.start(t);
+          }
+        } catch (e) { console.warn('mix clip failed', e); continue; }
       }
       const rendered = await off.startRendering();
       const wavBuf = audioBufferToWav(rendered);
       return new Blob([wavBuf], {type: 'audio/wav'});
     }
 
-    // --- ユーティリティ: AudioBuffer -> WAV ---
+    // --- audio -> WAV helpers (same as before) ---
     function audioBufferToWav(buffer, opt) {
       opt = opt || {}
       var numChannels = buffer.numberOfChannels
@@ -740,40 +660,25 @@
       }
     }
 
-    // --- 補助: Test play URL (admin) ---
-    async function testPlayUrl(url){
-      if (!url) { alert('URL を入力してください'); return; }
-      try {
-        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('fetch failed');
-        const ab = await res.arrayBuffer();
-        const buf = await audioContext.decodeAudioData(ab);
-        const src = audioContext.createBufferSource();
-        src.buffer = buf;
-        src.connect(audioContext.destination);
-        src.start();
-      } catch (e) {
-        console.error(e);
-        alert('試聴に失敗しました: ' + e.message);
-      }
-    }
-
-    // --- server time offset 推定 ---
+    // --- server time offset 推定（複数 ping の中央値） ---
     async function estimateServerOffset() {
       const rand = Math.random().toString(36).slice(2, 8);
       const pings = [];
       for (let i=0;i<6;i++){
         const t0 = Date.now();
         const tempRef = ref(db, `__serverTimeTest/${uid}_${rand}_${i}`);
-        await set(tempRef, {ts: serverTimestamp()});
-        const snap = await get(tempRef);
-        const serverTs = snap.val() && snap.val().ts;
-        const t1 = Date.now();
-        if (serverTs) {
-          const rtt = t1 - t0;
-          const offset = serverTs - (t0 + rtt/2);
-          pings.push(offset);
+        try {
+          await set(tempRef, {ts: serverTimestamp()});
+          const snap = await get(tempRef);
+          const serverTs = snap.val() && snap.val().ts;
+          const t1 = Date.now();
+          if (serverTs) {
+            const rtt = t1 - t0;
+            const offset = serverTs - (t0 + rtt/2);
+            pings.push(offset);
+          }
+        } catch(e) {
+          console.warn('ping failed', e);
         }
         await new Promise(r => setTimeout(r, 50));
       }
@@ -786,7 +691,7 @@
       }
     }
 
-    // --- ユーティリティ ---
+    // --- 補助関数 ---
     function getContrastYIQ(hexcolor){
       try {
         if (!hexcolor || !hexcolor.startsWith('#')) return '#fff';
@@ -798,15 +703,39 @@
       } catch(e){ return '#fff'; }
     }
 
-    // --- 注意メモ ---
-    // - 管理パネルはクライアント上の簡易パスワード(1122)で表示を切り替えます。本番では DB ルールで ownerUid 等による厳格チェックを行ってください。
-    // - Admin が保存すると sessions/{sessionId}/assets と rolesOrder が更新されます。
-    // - assets には:
-    //   assets.@ = "https://.../kyoku.mp3"
-    //   assets.miss = "https://.../miss.mp3"
-    //   assets.A = { clipUrl: "...", color: "#FF6666", guideTimes: [180.23, 162.42] }
-    // - guideTimes は秒（float）で保存されます（所望の時間フォーマットをパースします）。
-    // - 既存の機能は壊さない形で admin の編集機能を追加しました。
+    // --- リアルタイム: 他クライアントのアクションを1秒表示するロジック（DB側のrealtimeActionsを監視） ---
+    // 実装済み（上）
+
+    // ------------------ 重要: エラー分析（簡潔） ------------------
+    // 下の警告やエラーが出たときの原因と対策をこのファイルの外で行ってください：
+    //
+    // 1) "Failed to load resource: the server responded with a status of 400 ()"
+    //    - これはブラウザが指定した URL にアクセスして 400 を受け取ったことを意味します。
+    //    - 原因候補:
+    //      ・assets の URL が間違っている（例: gs:// をそのまま fetch した／Storage の公開URLではない）
+    //      ・Storage のセキュリティ設定で直リンクが拒否されている（公開 URL ではなく署名付きURLが必要）
+    //    - 対策:
+    //      ・CONFIG.assets や DB の assets に入れるのは公開 https://... の URL、または gs:// の場合は Firebase Storage の getDownloadURL を使う（このファイルは gs:// を解決します）。
+    //      ・ブラウザの DevTools Network を見て、どのリクエストが 400 を返しているか確認してください。
+    //
+    // 2) "FirebaseError: Firebase: Error (auth/configuration-not-found)."
+    //    - 典型的な原因:
+    //      ・Firebase Console で Authentication → Sign-in method → Anonymous sign-in を有効化していない
+    //      ・firebaseConfig の値（apiKey, authDomain など）が間違っている
+    //    - 対策:
+    //      ・Firebase コンソールの Authentication → Sign-in method で「匿名」を ON にしてください。
+    //      ・firebaseConfig が正しいか確認。間違いがなければ Console のログも確認してください。
+    //
+    // 3) "FIREBASE WARNING: Firebase error. Please ensure that you have the URL of your Firebase Realtime Database instance configured correctly."
+    //    - 意味: firebaseConfig に databaseURL の設定がないか間違っているため、Realtime Database の接続が正しくできていません。
+    //    - 対策:
+    //      ・firebaseConfig に正しい databaseURL を入れてください（例: https://<project-id>-default-rtdb.firebaseio.com）。
+    //
+    // 追加注意:
+    //  - storageBucket の値は通常 "<project-id>.appspot.com" です。コンソールで実際のバケット名を確認して firebaseConfig.storageBucket に設定してください。
+    //  - Storage のファイルにアクセスする場合、Public にしておくか、gs://パスを getDownloadURL() してから fetch してください（このファイルは gs:// -> getDownloadURL を試みます）。
+    //
+    // ------------------------------------------------------------------
 
   </script>
 </body>
