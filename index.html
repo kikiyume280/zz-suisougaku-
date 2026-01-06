@@ -94,16 +94,16 @@
       // - 直接 https の公開 URL を使うか、gs://bucket/path の形式でもOK（後者は Storage の getDownloadURL を使って解決します）
       // - guideTimes は文字列または数値の配列で指定可能
       assets: {
-        "@": "https://example.com/kyoku.mp3", // ← ここを実際のベース曲URLに書き換えてください
-        "miss": "https://example.com/miss.mp3",
+        "@": "https://github.com/kikiyume280/zz-suisougaku-/main/kyoku.mp3", // ← ここを実際のベース曲URLに書き換えてください
+        "miss": "https://github.com/kikiyume280/zz-suisougaku-/main/miss.mp3",
         // サンプル: A の設定
         "A": {
-          clipUrl: "https://example.com/A_note.mp3",
+          clipUrl: "https://example.com/A.mp3",
           color: "#FF6666",
           guideTimes: ["3:00.23", "2:42.32", "10.5"] // mm:ss.ms  等の文字列や秒数の数値が使えます
         },
         "B": {
-          clipUrl: "https://example.com/B_note.mp3",
+          clipUrl: "https://example.com/B.mp3",
           color: "#66CCFF",
           guideTimes: ["0:30.00", "0:45.5"]
         }
